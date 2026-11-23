@@ -33,7 +33,7 @@ for (const file of files) {
     if (file !== 'examples/demo-import.xlsx') { failures.push(`${file}: unexpected spreadsheet`); continue; }
     const workbook = XLSX.readFile(path.join(root, file));
     for (const sheet of workbook.SheetNames) scan(file, JSON.stringify(XLSX.utils.sheet_to_json(workbook.Sheets[sheet], { header: 1 })));
-  } else if (/\.(?:ts|tsx|js|cjs|json|md|yml|yaml|html|css|bat)$/.test(file) || ['LICENSE', '.gitignore', '.gitattributes'].includes(file)) {
+  } else if (/\.(?:ts|tsx|js|cjs|json|md|yml|yaml|html|css|bat|svg|mmd)$/.test(file) || ['LICENSE', '.gitignore', '.gitattributes'].includes(file)) {
     scan(file, fs.readFileSync(path.join(root, file), 'utf8'));
   }
 }

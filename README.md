@@ -46,19 +46,9 @@
 
 ## 技术架构
 
-```mermaid
-flowchart LR
-  UI[React 页面] --> IPC[preload / contextBridge]
-  Legacy[生产库存兼容界面] --> IPC
-  IPC --> Main[Electron 主进程]
-  Main --> Order[订单事务与业务校验]
-  Main --> Import[Excel 校验与导入]
-  Main --> Print[系统打印]
-  Order --> DB[(sql.js / SQLite)]
-  Import --> DB
-  Main --> DB
-  DB --> Backup[数据库文件与备份]
-```
+![本地订单与发货单打印系统技术架构](docs/images/architecture.svg)
+
+[查看可编辑的 Mermaid 源文件](docs/architecture.mmd)
 
 渲染进程关闭 Node.js 集成，使用 `contextIsolation` 与明确的 IPC 接口访问本地数据。应用不要求登录或云端数据库。
 
