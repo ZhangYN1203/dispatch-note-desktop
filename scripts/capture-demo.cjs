@@ -59,7 +59,13 @@ async function capture() {
   await until(`document.body.innerText.includes('DEMO-001')`);
   await screenshot('orders', '/', `document.body.innerText.includes('DEMO-001')`);
   await screenshot('editor', `/orders/${id}`, `document.body.innerText.includes('商品明细') && document.querySelectorAll('.btn-danger').length >= 5`);
-  await screenshot('print', `/orders/${id}/print`, `!!document.querySelector('.print-height-control input:not(:disabled)')`);
+  await screenshot('print', `/orders/${id}/print`, `!!document.querySelector('.print-settings-button:not(:disabled)')`);
+  window.webContents.getPrintersAsync = async () => [{name:'演示打印机',displayName:'演示打印机（虚构）',isDefault:true,status:0,options:{}}];
+  await js(`document.querySelector('.toolbar .btn-primary').click()`);
+  await until(`!!document.querySelector('[role="dialog"]') && document.querySelector('[aria-label="打印机"]').options.length > 1`);
+  await wait(150);
+  fs.writeFileSync(path.join(output,'print-settings.png'),(await window.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('[aria-label="关闭打印设置"]').click()`);
   await js(`window.location.hash = '/product-manager'`);
   await until(`Array.from(document.querySelectorAll('span')).some(s=>s.textContent==='演示客户 B 价格表')`);
   await js(`Array.from(document.querySelectorAll('span')).find(s=>s.textContent==='演示客户 B 价格表').parentElement.click()`);

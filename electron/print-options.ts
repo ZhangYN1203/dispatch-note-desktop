@@ -1,12 +1,18 @@
 import type { WebContentsPrintOptions } from 'electron'
+import { normalizePrintProfile } from './print-profile'
+import type { PrintProfile } from './print-profile'
 
-export function getPrintOptions(settings: Record<string, string>): WebContentsPrintOptions {
-  const height = Number(settings.printPageHeight || '95')
-  if (!Number.isInteger(height) || height < 70 || height > 150) throw new Error('纸张高度必须是 70～150 mm 的整数')
+export function getPrintOptions(input: PrintProfile | Record<string, string>): WebContentsPrintOptions {
+  const p = normalizePrintProfile('widthMm' in input ? input as PrintProfile : { heightMm: Number(input.printPageHeight || 95) })
   return {
-    landscape: false,
-    pageSize: { width: 240000, height: height * 1000 },
-    margins: { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 },
+    landscape: p.orientation === 'landscape',
+    pageSize: { width: Math.round(p.widthMm * 1000), height: Math.round(p.heightMm * 1000) },
+    // Content margins are already present in the page CSS, not applied twice.
+    margins: { marginType: 'none' },
+    scaleFactor: 100,
+    copies: p.copies,
+    duplexMode: 'simplex',
+    ...(p.printerName ? { deviceName: p.printerName } : {}),
     printBackground: true,
     silent: false,
   }

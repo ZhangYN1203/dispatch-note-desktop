@@ -223,7 +223,7 @@ test('恢复拒绝结构不兼容的 SQLite，启动备份仅保留最近 10 份
 test('打印配置使用毫米转微米，拒绝无效高度', () => {
   const { getPrintOptions } = require('../electron/print-options.ts');
   assert.deepEqual(getPrintOptions({ printPageHeight: '120' }).pageSize, { width: 240000, height: 120000 });
-  for (const printPageHeight of ['-1', '151', 'abc', '95.5']) assert.throws(() => getPrintOptions({ printPageHeight }));
+  for (const printPageHeight of ['-1', '601', 'abc']) assert.throws(() => getPrintOptions({ printPageHeight }));
 });
 
 
@@ -234,4 +234,25 @@ test('公开演示 Excel 能被实际导入器识别，数量与虚构种子一�
   assert.equal(preview.products[0].productCode, 'DEMO-P001');
   assert.equal(preview.products[0].price, 48);
   assert.equal(preview.customers[0].phone, '');
+});
+
+
+test('每台打印机分别保存规格，并保留当前选择', () => {
+  const { getPrintConfiguration, savePrinterProfile } = require('../electron/printer-config.ts');
+  const { normalizePrintProfile } = require('../electron/print-profile.ts');
+  savePrinterProfile(normalizePrintProfile({ printerName: 'Printer A', widthMm: 240, heightMm: 140 }));
+  savePrinterProfile(normalizePrintProfile({ printerName: 'Printer B', widthMm: 210, heightMm: 297 }));
+  const config = getPrintConfiguration();
+  assert.equal(config.active.printerName, 'Printer B');
+  assert.equal(config.profiles['Printer A'].heightMm, 140);
+  assert.equal(config.profiles['Printer B'].heightMm, 297);
+});
+
+test('保存打印规格中途失败时当前设置与历史配置一起回滚', () => {
+  const { getPrintConfiguration, savePrinterProfile } = require('../electron/printer-config.ts');
+  const before = getPrintConfiguration();
+  db.getDb().run("CREATE TRIGGER reject_profile BEFORE INSERT ON settings WHEN NEW.key='printerProfilesV2' BEGIN SELECT RAISE(ABORT,'配置写入失败'); END");
+  assert.throws(() => savePrinterProfile({ ...before.active, heightMm: 300 }), /配置写入失败/);
+  assert.deepEqual(getPrintConfiguration(), before);
+  db.getDb().run('DROP TRIGGER reject_profile');
 });

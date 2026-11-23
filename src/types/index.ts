@@ -1,3 +1,5 @@
+import type { PrintProfile, PrintConfiguration, LocalPrinter } from '../../electron/print-profile'
+
 export interface Order {
   id: number
   documentNo: string
@@ -110,7 +112,10 @@ export interface ElectronAPI {
   createOrderItem: (data: Partial<OrderItem>) => Promise<{ id: number }>
   updateOrderItem: (id: number, data: Partial<OrderItem>) => Promise<{ success: boolean }>
   deleteOrderItem: (id: number) => Promise<{ success: boolean }>
-  printWindow: () => Promise<void>
+  printWindow: (profile?: PrintProfile) => Promise<void>
+  getPrintConfiguration: () => Promise<PrintConfiguration>
+  savePrinterProfile: (profile: PrintProfile) => Promise<PrintProfile>
+  listPrinters: () => Promise<LocalPrinter[]>
 
   // Products & Customers
   searchProducts: (keyword?: string) => Promise<Product[]>

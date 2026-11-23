@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteInventory: (store: string, id: number) => ipcRenderer.invoke('inventory:delete', store, id),
   createBackup: () => ipcRenderer.invoke('backup:create'),
   restoreBackup: () => ipcRenderer.invoke('backup:restore'),
+  getPrintConfiguration: () => ipcRenderer.invoke('printing:getConfiguration'),
+  savePrinterProfile: (profile: unknown) => ipcRenderer.invoke('printing:saveProfile', profile),
+  listPrinters: () => ipcRenderer.invoke('printing:listPrinters'),
   // Customer Management
   createCustomer: (data: any) => ipcRenderer.invoke('db:createCustomer', data),
   updateCustomer: (id: number, data: any) => ipcRenderer.invoke('db:updateCustomer', id, data),
@@ -36,7 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteOrderItem: (id: number) => ipcRenderer.invoke('db:deleteOrderItem', id),
 
   // Print
-  printWindow: () => ipcRenderer.invoke('print:window'),
+  printWindow: (profile?: unknown) => ipcRenderer.invoke('print:window', profile),
 
   // Products & Customers
   searchProducts: (keyword?: string) => ipcRenderer.invoke('db:searchProducts', keyword),

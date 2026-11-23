@@ -4,6 +4,8 @@ import fs from 'fs'
 import { initDatabase, automaticBackup, createBackup, restoreDatabase } from './database'
 import { listInventory, putInventory, deleteInventory, migrateInventory, inventoryMigrated } from './inventory'
 import { getPrintOptions } from './print-options'
+import { getPrintConfiguration, savePrinterProfile } from './printer-config'
+import { normalizePrintProfile } from './print-profile'
 import {
   createOrder,
   getOrders,
@@ -185,16 +187,30 @@ function registerIpcHandlers() {
     return generateDocumentNo(date)
   })
 
-  // Button and Ctrl+P use the same settings and completion callback.
-  ipcMain.handle('print:window', async () => {
+  ipcMain.handle('printing:getConfiguration', () => getPrintConfiguration())
+  ipcMain.handle('printing:saveProfile', (_event, profile) => savePrinterProfile(profile))
+  ipcMain.handle('printing:listPrinters', async () => {
     if (!mainWindow) throw new Error('打印窗口不可用')
-    const options = getPrintOptions(getPrintSettings())
-    return new Promise<void>((resolve, reject) => {
-      mainWindow!.webContents.print(options, (success, reason) => {
-        if (success || /cancel/i.test(reason)) resolve()
-        else reject(new Error(reason || '打印失败，请检查打印机设置'))
+    return (await mainWindow.webContents.getPrintersAsync()).map(p => ({ name: p.name, displayName: p.displayName, isDefault: p.isDefault }))
+  })
+  let printInProgress = false
+  ipcMain.handle('print:window', async (_event, input) => {
+    if (!mainWindow) throw new Error('打印窗口不可用')
+    if (printInProgress) throw new Error('已有打印任务正在处理')
+    const profile = normalizePrintProfile(input ?? getPrintConfiguration().active)
+    const options = getPrintOptions(profile)
+    printInProgress = true
+    try {
+      if (profile.printerName && !(await mainWindow.webContents.getPrintersAsync()).some(p => p.name === profile.printerName)) {
+        throw new Error('选择的打印机已不可用，请重新打开打印设置选择打印机')
+      }
+      await new Promise<void>((resolve, reject) => {
+        mainWindow!.webContents.print(options, (success, reason) => {
+          if (success || /cancel/i.test(reason)) resolve()
+          else reject(new Error(reason || '打印失败，请检查纸张规格和打印机驱动设置'))
+        })
       })
-    })
+    } finally { printInProgress = false }
   })
 
   // Products & Customers
@@ -393,7 +409,7 @@ function registerIpcHandlers() {
   // ── Settings handlers ──
   ipcMain.handle('settings:get', async () => getPrintSettings())
   ipcMain.handle('settings:set', async (_event, data: Record<string, string | number>) => {
-    if ('printPageHeight' in data) getPrintOptions({ printPageHeight: String(data.printPageHeight) })
+    if ('printPageHeight' in data) savePrinterProfile(normalizePrintProfile({ ...getPrintConfiguration().active, preset: 'custom', heightMm: Number(data.printPageHeight) }))
     return setPrintSettings(data)
   })
 }

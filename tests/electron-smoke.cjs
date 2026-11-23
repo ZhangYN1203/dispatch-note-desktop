@@ -102,56 +102,145 @@ async function run() {
   await until(`document.body.innerText.includes('导入成功')`);
   assert.equal(database.queryOne('SELECT price FROM products WHERE productCode=?', ['SMOKE-IMPORT']).price, 2.5);
   reports.push('首页 Excel 导入入口完成文件选择、预览确认和数据库写入');
-  await evaluate(`window.location.hash = '/orders/${id}/print'`);
-  await until('document.querySelectorAll(".print-page").length === 2');
-  await until('!!document.querySelector(".print-height-control input:not(:disabled)")');
-  await evaluate('document.fonts.ready');
-  const pdf = await window.webContents.printToPDF({ preferCSSPageSize: true, printBackground: true, margins: {top:0,bottom:0,left:0,right:0} });
-  fs.writeFileSync(path.join(root, 'print.pdf'), pdf);
-  fs.writeFileSync(path.join(root, 'print.png'), (await window.webContents.capturePage()).toPNG());
-  const pdfText = pdf.toString('latin1');
-  const pages = (pdfText.match(/\/Type \/Page\b/g) || []).length;
-  assert.equal(pages, 2, '11 items print as exactly 2 physical pages');
-  const boxes = [...pdfText.matchAll(/\/MediaBox\s*\[([^\]]+)\]/g)].map(m => m[1]);
-  assert.ok(boxes.length >= 2);
-  const dims = boxes[0].trim().split(/\s+/).map(Number);
-  assert.ok(Math.abs(dims[2] - 240 / 25.4 * 72) < 2);
-  assert.ok(Math.abs(dims[3] - 95 / 25.4 * 72) < 2);
-  reports.push('11 条商品生成 2 页 240×95mm PDF');
-  // Avoid real print dialogs; verify the application's button and Ctrl+P reach the same handler.
+  window.webContents.getPrintersAsync = async () => [
+    {name:'Test Printer A',displayName:'测试打印机 A',isDefault:true,status:0,options:{}},
+    {name:'Test Printer B',displayName:'测试打印机 B',isDefault:false,status:0,options:{}},
+  ];
   let printCalls = 0;
+  let lastOptions;
   window.webContents.print = (options, callback) => {
-    printCalls++;
-    assert.equal(options.pageSize.height, 95000);
+    printCalls++; lastOptions = options;
     callback(false, '烟测打印机失败');
   };
-  await evaluate(`document.querySelector('.toolbar .btn-primary').click()`);
+  const ready = async () => {
+    await until(`!!document.querySelector('.print-settings-button:not(:disabled)') && document.querySelector('.print-area')?.getAttribute('aria-busy')==='false'`);
+  };
+  const field = async (label, value, select = false) => {
+    await evaluate(`(async()=>{
+      const input = document.querySelector('[aria-label="${label}"]');
+      const proto = ${select ? 'HTMLSelectElement' : 'HTMLInputElement'}.prototype;
+      Object.getOwnPropertyDescriptor(proto,'value').set.call(input,${JSON.stringify(String(value))});
+      input.dispatchEvent(new Event('${select ? 'change' : 'input'}',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,0));
+    })()`);
+  };
+  const openSettings = async (print = false) => {
+    await evaluate(`document.querySelector('.toolbar ${print ? '.btn-primary' : '.print-settings-button'}').click()`);
+    await until(`!!document.querySelector('[role="dialog"]')`);
+  };
+  const apply = async (print = false) => {
+    await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent.includes('${print ? '确认规格，进入系统打印' : '应用并查看预览'}')).click()`);
+    await until(`!document.querySelector('[role="dialog"]')`);
+    await ready();
+  };
+  const pdfFor = async (profile, name) => {
+    const bytes = await window.webContents.printToPDF({preferCSSPageSize:true, printBackground:true,
+      landscape:profile.orientation==='landscape', pageSize:{width:profile.widthMm/25.4,height:profile.heightMm/25.4}});
+    fs.writeFileSync(path.join(root,name+'.pdf'),bytes);
+    const text = bytes.toString('latin1');
+    const physical = (text.match(/\/Type \/Page\b/g) || []).length;
+    assert.equal(physical, await evaluate(`document.querySelectorAll('.print-page').length`), name+' pages match preview');
+    const dimensions = [...text.matchAll(/\/MediaBox\s*\[([^\]]+)\]/g)][0][1].trim().split(/\s+/).map(Number);
+    const width = profile.orientation==='landscape' ? profile.heightMm : profile.widthMm;
+    const height = profile.orientation==='landscape' ? profile.widthMm : profile.heightMm;
+    assert.ok(Math.abs(dimensions[2]-width/25.4*72)<2, name+' physical width');
+    assert.ok(Math.abs(dimensions[3]-height/25.4*72)<2, name+' physical height');
+    return physical;
+  };
+  await evaluate(`window.location.hash = '/orders/${id}/print'`);
+  await ready();
+  const defaultProfile = await evaluate(`window.electronAPI.getPrintConfiguration().then(c=>c.active)`);
+  assert.equal(await pdfFor(defaultProfile,'print-95'),2);
+  fs.writeFileSync(path.join(root,'print.png'),(await window.webContents.capturePage()).toPNG());
+  await openSettings(true);
+  assert.equal(printCalls,0,'opening the prompt must not start printing');
+  assert.match(await evaluate(`document.querySelector('[role="dialog"]').innerText`),/100%/);
+  await field('打印机','Test Printer A',true);
+  await field('纸张规格','a4',true);
+  await field('方向','landscape',true);
+  await field('字号（磅）',12);
+  await field('上边距（mm）',5);
+  await field('下边距（mm）',5);
+  await field('左边距（mm）',5);
+  await field('右边距（mm）',5);
+  await field('打印份数',2);
+  await apply(false);
+  assert.equal(printCalls,0,'applying the preview must not start printing');
+  const a4 = await evaluate(`window.electronAPI.getPrintConfiguration().then(c=>c.active)`);
+  assert.equal(a4.printerName,'Test Printer A'); assert.equal(a4.orientation,'landscape');
+  assert.equal(a4.widthMm,210); assert.equal(a4.heightMm,297); assert.equal(a4.copies,2);
+  await pdfFor(a4,'print-a4-landscape');
+  await openSettings(true);
+  assert.match(await evaluate(`document.querySelector('[role="dialog"]').innerText`),/横向/);
+  await apply(true);
   await until(`document.body.innerText.includes('烟测打印机失败')`);
+  assert.equal(printCalls,1); assert.equal(lastOptions.deviceName,'Test Printer A');
+  assert.equal(lastOptions.copies,2); assert.equal(lastOptions.landscape,true);
+  assert.equal(lastOptions.scaleFactor,100); assert.equal(lastOptions.margins.marginType,'none');
+  assert.deepEqual(lastOptions.pageSize,{width:210000,height:297000});
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'p',ctrlKey:true,cancelable:true}))`);
-  await wait(300);
-  assert.equal(printCalls, 2);
-  reports.push('按钮和 Ctrl+P 共用打印配置，显示打印错误');
-  for (const height of [70, 150]) {
-    await evaluate(`window.electronAPI.setPrintSettings({printPageHeight:'${height}'})`);
-    await evaluate(`window.location.hash = '/'`);
-    await until('!document.querySelector(".print-page")');
-    await evaluate(`window.location.hash = '/orders/${id}/print'`);
-    await until(`!!document.querySelector('.print-height-control input:not(:disabled)') && document.querySelector('.print-height-control input').value === '${height}'`);
-    await wait(350);
-    const logicalPages = await evaluate(`document.querySelectorAll('.print-page').length`);
-    const boundary = await window.webContents.printToPDF({preferCSSPageSize:true, printBackground:true});
-    assert.equal((boundary.toString('latin1').match(/\/Type \/Page\b/g) || []).length, logicalPages, `${height}mm physical pages match preview`);
-    fs.writeFileSync(path.join(root, `print-${height}.pdf`), boundary);
+  await until(`!!document.querySelector('[role="dialog"]')`);
+  assert.equal(printCalls,1,'Ctrl+P must ask before submitting');
+  await apply(true);
+  await until(`document.querySelector('.toolbar .btn-primary:not(:disabled)') && document.body.innerText.includes('烟测打印机失败')`);
+  assert.equal(printCalls,2);
+  reports.push('打印按钮与 Ctrl+P 都先确认规格，预览不打印；确认后使用同一份方向/纸型/份数并显示错误');
+
+  await openSettings();
+  await field('打印机','Test Printer B',true);
+  await field('纸张规格','continuous',true);
+  await field('纸张宽度（mm）',216);
+  await field('纸张高度（mm）',140);
+  await field('字号（磅）',10);
+  await apply();
+  await openSettings();
+  await field('打印机','Test Printer A',true);
+  assert.equal(await evaluate(`document.querySelector('[aria-label="纸张高度（mm）"]').value`),'297');
+  assert.equal(await evaluate(`document.querySelector('[aria-label="方向"]').value`),'landscape');
+  await apply();
+  assert.equal(await evaluate(`window.electronAPI.getPrintConfiguration().then(c=>c.profiles['Test Printer B'].heightMm)`),140);
+  reports.push('切换打印机能恢复各自的纸张、方向和字号配置');
+
+  await openSettings();
+  await field('纸张宽度（mm）',80); await field('纸张高度（mm）',50);
+  await field('方向','portrait',true); await field('左边距（mm）',40); await field('右边距（mm）',40);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent.includes('应用并查看预览')).disabled`),true);
+  await evaluate(`document.querySelector('[aria-label="关闭打印设置"]').click()`);
+  assert.equal(printCalls,2);
+  reports.push('无效边距阻止提交，不产生打印任务');
+
+  for (const scenario of [
+    {widthMm:240,heightMm:70,orientation:'portrait',fontSizePt:10},
+    {widthMm:240,heightMm:150,orientation:'portrait',fontSizePt:11},
+    {widthMm:210,heightMm:297,orientation:'portrait',fontSizePt:12},
+    {widthMm:216,heightMm:140,orientation:'portrait',fontSizePt:10},
+    {widthMm:148,heightMm:210,orientation:'landscape',fontSizePt:9},
+  ]) {
+    const profile = {...defaultProfile,...scenario,printerName:'',preset:'custom',maxRowsPerPage:50};
+    await evaluate(`window.electronAPI.savePrinterProfile(${JSON.stringify(profile)})`);
+    await evaluate(`window.location.hash = '/'`); await until(`!document.querySelector('.print-page')`);
+    await evaluate(`window.location.hash = '/orders/${id}/print'`); await ready();
+    assert.equal(await evaluate(`document.querySelector('.error-message')?.innerText || ''`),'');
+    await pdfFor(profile,`print-${scenario.widthMm}-${scenario.heightMm}-${scenario.orientation}`);
   }
-  reports.push('70mm 和 150mm 边界纸张：预览与物理页数一致');
-  await evaluate(`window.location.hash = '/'`);
-  await until('!document.querySelector(".print-page")');
+  reports.push('连续纸、自定义纸张、A4 及 A5 横向：字号/边距变化后预览与 PDF 物理尺寸、页数一致');
+  const overflow = {...defaultProfile,preset:'custom',widthMm:80,heightMm:50,fontSizePt:18,maxRowsPerPage:50};
+  await evaluate(`window.electronAPI.savePrinterProfile(${JSON.stringify(overflow)})`);
+  await evaluate(`window.location.hash = '/'`); await until(`!document.querySelector('.print-page')`);
+  await evaluate(`window.location.hash = '/orders/${id}/print'`); await ready();
+  assert.match(await evaluate(`document.body.innerText`), /超出/);
+  await openSettings(true); await apply(true);
+  await until(`!!document.querySelector('.toolbar .btn-primary:not(:disabled)')`);
+  assert.equal(printCalls,2,'overflowing content must not be sent to a printer');
+  await assert.rejects(evaluate(`window.electronAPI.printWindow({...${JSON.stringify(defaultProfile)},printerName:'Unavailable Printer'})`),/不可用/);
+  assert.equal(printCalls,2,'an unavailable printer must not fall back silently');
+  reports.push('过小纸张内容溢出或打印机不可用时阻止发送，避免截断或误投其他打印机');
+  await evaluate(`window.location.hash = '/'`); await until(`!document.querySelector('.print-page')`);
+  await evaluate(`window.electronAPI.savePrinterProfile(${JSON.stringify(defaultProfile)})`);
   const emptyId = await evaluate(`window.electronAPI.saveOrderWithItems({documentNo:'EMPTY'},[]).then(o=>o.id)`);
-  await evaluate(`window.location.hash = '/orders/${emptyId}/print'`);
-  await until('!!document.querySelector(".print-height-control input:not(:disabled)")');
-  const emptyPdf = await window.webContents.printToPDF({preferCSSPageSize:true, printBackground:true});
-  assert.equal((emptyPdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 1);
-  reports.push('空订单打印为一页');
+  await evaluate(`window.location.hash = '/orders/${emptyId}/print'`); await ready();
+  assert.equal(await pdfFor(defaultProfile,'print-empty'),1);
+  reports.push('空订单打印一页');
   console.log(JSON.stringify({ passed: reports, artifactDirectory: root }, null, 2));
   app.exit(0);
 }

@@ -337,3 +337,60 @@
   .print-page { break-after: page; height: auto !important; min-height: calc(var(--page-height, 95mm) - 0.5mm) !important; }
   .print-page:last-child { break-after: auto; }
 }
+
+/* Paper size, margins and typography use the same validated profile as the main process. */
+.print-page {
+  width: var(--print-paper-width, 240mm);
+  padding: var(--print-margin-top, 2mm) var(--print-margin-right, 2mm) var(--print-margin-bottom, 2mm) var(--print-margin-left, 2mm);
+  font-size: var(--print-font-size, 11pt);
+}
+.print-page-content { width: 100%; }
+.print-page .info-table { table-layout: fixed; }
+.print-page .info-table .info-label { width: 12%; white-space: normal; }
+.print-page .info-table .info-value { min-width: 0; }
+.print-page .info-table td,
+.print-page .items-table th,
+.print-page .items-table td,
+.print-page .sign-field { font-size: var(--print-font-size, 11pt) !important; }
+.print-page .company-name { font-size: calc(var(--print-font-size, 11pt) * 1.2); }
+.print-page .print-title { font-size: calc(var(--print-font-size, 11pt) * 1.4); letter-spacing: 1px; }
+.print-page .print-doc-no { font-size: var(--print-font-size, 11pt); }
+.print-page .product-code, .print-page .remark, .print-page .page-number { font-size: calc(var(--print-font-size, 11pt) * 0.85); }
+.print-page .items-table .col-seq { width: 6.7%; }
+.print-page .items-table .col-name { width: 25.5%; }
+.print-page .items-table .col-spec { width: 10%; }
+.print-page .items-table .col-pkg { width: 8.7%; }
+.print-page .items-table .col-qty { width: 8.7%; }
+.print-page .items-table .col-price { width: 12.1%; }
+.print-page .items-table .col-amount { width: 13.4%; }
+.print-page .items-table .col-sign { width: 14.9%; }
+.toolbar { flex-wrap: wrap; align-items: center; }
+.print-profile-summary { margin-left: auto; color: #555; font-size: 13px; }
+.print-driver-guide { padding: 12px 18px; margin: 0 0 16px; border: 1px solid #c9d9ec; border-radius: 8px; background: #f4f8fd; font-size: 13px; line-height: 1.65; }
+.print-driver-guide summary { cursor: pointer; font-weight: 600; }
+.print-driver-guide ol { margin: 8px 0 8px 20px; }
+.print-driver-guide li { margin: 4px 0; }
+.print-driver-guide h3 { font-size: 15px; }
+.print-settings-overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.4); display: flex; align-items: flex-start; justify-content: center; padding: 16px; }
+.print-settings-dialog { width: min(980px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: white; border-radius: 12px; padding: 20px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+.print-settings-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 8px; }
+.print-settings-heading h2 { font-size: 21px; }
+.print-settings-dialog > p { margin: 8px 0 14px; }
+.print-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; margin: 16px 0; }
+.print-setting-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.print-setting-field input, .print-setting-field select { width: 100%; min-width: 0; height: 36px; padding: 6px 8px; border: 1px solid #b8c4d0; border-radius: 5px; font: inherit; background: white; }
+.print-setting-summary { font-size: 13px; color: #34465a; }
+.print-setting-warning { padding: 8px 12px; border-radius: 6px; color: #7c4a05; background: #fff5dc; font-size: 13px; }
+.print-settings-actions { position: sticky; bottom: -20px; display: flex; justify-content: flex-end; gap: 12px; padding: 12px 0; background: white; border-top: 1px solid #e4e9ef; }
+@media (max-width: 760px) {
+  .print-settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .print-settings-dialog { padding: 16px; }
+}
+@media print {
+  .print-page {
+    width: var(--print-paper-width, 240mm) !important;
+    padding: var(--print-margin-top, 2mm) var(--print-margin-right, 2mm) var(--print-margin-bottom, 2mm) var(--print-margin-left, 2mm) !important;
+    height: auto !important;
+    min-height: calc(var(--page-height, 95mm) - .5mm) !important;
+  }
+}

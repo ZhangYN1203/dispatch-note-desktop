@@ -1,3 +1,4 @@
+import type { PrintProfile } from '../../electron/print-profile'
 /**
  * IPC utility functions for the renderer process.
  * These functions call the Electron IPC bridge exposed via preload.
@@ -68,9 +69,9 @@ export async function removeOrderItem(id: number): Promise<void> {
 
 // ── Print ──
 
-export async function printWindow(): Promise<void> {
+export async function printWindow(profile?: PrintProfile): Promise<void> {
   const api = getApi()
-  return api.printWindow()
+  return api.printWindow(profile)
 }
 
 // ── Products & Customers ──

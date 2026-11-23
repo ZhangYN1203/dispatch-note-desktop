@@ -1,135 +1,143 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { fetchOrderById, getPrintSettings, setPrintSettings, printWindow } from '../utils/ipc'
+import { fetchOrderById, printWindow } from '../utils/ipc'
 import type { Order, OrderItem } from '../types'
+import { DEFAULT_PRINT_PROFILE, getDriverGuidance, getPageGeometry, getPrintErrorMessage } from '../../electron/print-profile'
+import type { PrintConfiguration, PrintProfile } from '../../electron/print-profile'
+import PrintSettingsDialog from '../components/PrintSettingsDialog'
 import '../styles/print.css'
-
-const ROWS_PER_PAGE = 10
 
 const OrderPrint: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const printRef = useRef<HTMLDivElement>(null)
-
   const [order, setOrder] = useState<(Order & { items: OrderItem[] }) | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [printError, setPrintError] = useState('')
-  const [pageHeight, setPageHeight] = useState(95)
+  const [profile, setProfile] = useState<PrintProfile>({ ...DEFAULT_PRINT_PROFILE })
+  const [config, setConfig] = useState<PrintConfiguration>({ active: profile, profiles: {} })
   const [settingsReady, setSettingsReady] = useState(false)
   const [printing, setPrinting] = useState(false)
-  const [rowsPerPage, setRowsPerPage] = useState(ROWS_PER_PAGE)
-  const [layoutError, setLayoutError] = useState('')
+  const [dialogMode, setDialogMode] = useState<'settings' | 'print' | null>(null)
+  const [pendingPrint, setPendingPrint] = useState(false)
   const printBusy = useRef(false)
+  const [pagination, setPagination] = useState({ key: '', rows: 10 })
+  const [layout, setLayout] = useState({ key: '', ready: false, error: '' })
+  const geometry = getPageGeometry(profile)
+  const layoutKey = JSON.stringify([profile, order?.id, order?.items])
+  const rowsPerPage = pagination.key === layoutKey ? pagination.rows : profile.maxRowsPerPage
+  const layoutReady = layout.key === layoutKey && layout.ready
+  const layoutError = layout.key === layoutKey ? layout.error : ''
 
   useEffect(() => {
     let alive = true
-    getPrintSettings().then(settings => {
+    window.electronAPI.getPrintConfiguration().then(value => {
       if (!alive) return
-      const height = Number(settings.printPageHeight || 95)
-      setPageHeight(Number.isInteger(height) && height >= 70 && height <= 150 ? height : 95)
-      setSettingsReady(true)
-    }).catch(error => { if (alive) setPrintError('加载打印设置失败：' + error.message) })
+      setProfile(value.active); setConfig(value); setSettingsReady(true)
+      if (value.warning) setPrintError(value.warning)
+    }).catch(error => { if (alive) setPrintError('加载打印设置失败：' + getPrintErrorMessage(error)) })
     return () => { alive = false }
   }, [])
 
-  useEffect(() => {
-    if (!settingsReady) return
-    const timer = window.setTimeout(() => {
-      void setPrintSettings({ printPageHeight: String(pageHeight) }).catch(error => setPrintError(error.message))
-    }, 250)
-    return () => window.clearTimeout(timer)
-  }, [pageHeight, settingsReady])
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--page-height', `${pageHeight}mm`)
-    // @page size cannot rely on CSS custom properties in all Chromium versions.
+  useLayoutEffect(() => {
+    const values: Record<string, string> = {
+      '--print-paper-width': `${geometry.widthMm}mm`, '--page-height': `${geometry.heightMm}mm`,
+      '--print-margin-top': `${profile.marginTopMm}mm`, '--print-margin-bottom': `${profile.marginBottomMm}mm`,
+      '--print-margin-left': `${profile.marginLeftMm}mm`, '--print-margin-right': `${profile.marginRightMm}mm`,
+      '--print-font-size': `${profile.fontSizePt}pt`,
+    }
+    for (const [key, value] of Object.entries(values)) document.documentElement.style.setProperty(key, value)
     const style = document.createElement('style')
-    style.textContent = `@page { size: 240mm ${pageHeight}mm; margin: 0; }`
+    style.textContent = `@page { size: ${geometry.widthMm}mm ${geometry.heightMm}mm; margin: 0; }`
     document.head.appendChild(style)
     return () => {
       style.remove()
-      document.documentElement.style.removeProperty('--page-height')
+      for (const key of Object.keys(values)) document.documentElement.style.removeProperty(key)
     }
-  }, [pageHeight])
+  }, [profile])
 
   useEffect(() => {
     if (!id) return
-    setLoading(true)
-    setError('')
-    fetchOrderById(Number(id))
-      .then(data => {
-        if (!data) {
-          setError('订单不存在')
-          return
-        }
-        setOrder(data)
-      })
-      .catch((err: any) => setError(err.message || '加载订单失败'))
-      .finally(() => setLoading(false))
+    let alive = true
+    setLoading(true); setOrder(null); setError('')
+    fetchOrderById(Number(id)).then(data => {
+      if (!alive) return
+      if (!data) setError('订单不存在')
+      else setOrder(data)
+    }).catch(error => { if (alive) setError(error.message || '加载订单失败') })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [id])
 
-  useLayoutEffect(() => { setRowsPerPage(ROWS_PER_PAGE) }, [pageHeight, order])
   useLayoutEffect(() => {
     if (!order || !printRef.current) return
-    const measure = () => {
-      const allowed = pageHeight * 96 / 25.4 - 2
-      const overflowing = Array.from(printRef.current?.querySelectorAll<HTMLElement>('.print-page') || []).some(page => {
-        const last = page.lastElementChild
-        return last && last.getBoundingClientRect().bottom - page.getBoundingClientRect().top > allowed
-      })
-      if (overflowing && rowsPerPage > 1) setRowsPerPage(rowsPerPage - 1)
-      setLayoutError(overflowing && rowsPerPage === 1 ? '内容超出当前纸张高度，请增大纸张高度或缩短过长字段。' : '')
-    }
-    measure()
     let active = true
-    void document.fonts.ready.then(() => { if (active) measure() })
+    const measure = () => {
+      if (!active) return
+      const allowed = geometry.contentHeightMm * 96 / 25.4 - 2
+      const contents = Array.from(printRef.current?.querySelectorAll<HTMLElement>('.print-page-content') || [])
+      const tooWide = contents.some(content => content.scrollWidth > content.clientWidth + 1)
+      const tallest = Math.max(0, ...contents.map(content => {
+        const last = content.lastElementChild
+        return last ? last.getBoundingClientRect().bottom - content.getBoundingClientRect().top : 0
+      }))
+      const tooTall = tallest > allowed
+      if (tooTall && !tooWide && rowsPerPage > 1) {
+        const heights = contents.flatMap(content => Array.from(content.querySelectorAll('tbody tr')).map(row => row.getBoundingClientRect().height)).filter(value => value > 0)
+        const remove = Math.max(1, Math.ceil((tallest - allowed) / Math.max(1, Math.min(...heights))))
+        setPagination({ key: layoutKey, rows: Math.max(1, rowsPerPage - remove) })
+        setLayout({ key: layoutKey, ready: false, error: '' })
+      } else {
+        setLayout({ key: layoutKey, ready: true, error: tooWide ? '内容超出纸张宽度，请增加宽度、切换横向或减小字号。'
+          : tooTall ? '单行内容超出可打印高度，请增大纸张高度、减小边距或字号。' : '' })
+      }
+    }
+    if (document.fonts.status === 'loaded') measure()
+    else void document.fonts.ready.then(measure)
     return () => { active = false }
-  }, [rowsPerPage, pageHeight, order])
+  }, [layoutKey, rowsPerPage])
 
-  const handlePrint = useCallback(async () => {
-    if (printBusy.current || !settingsReady || !order || layoutError) return
-    printBusy.current = true
-    setPrinting(true)
-    setPrintError('')
+  const openPrintDialog = useCallback(() => {
+    if (!printBusy.current && settingsReady && order) setDialogMode('print')
+  }, [settingsReady, order])
+
+  const applyProfile = async (next: PrintProfile, print: boolean) => {
+    if (printBusy.current) return
+    printBusy.current = true; setPrinting(true); setPrintError('')
     try {
-      await setPrintSettings({ printPageHeight: String(pageHeight) })
-      await document.fonts.ready
-      await printWindow()
-    } catch (error: unknown) {
-      setPrintError(error instanceof Error ? error.message : String(error))
-    } finally { printBusy.current = false; setPrinting(false) }
-  }, [pageHeight, settingsReady, order, layoutError])
+      const saved = await window.electronAPI.savePrinterProfile(next)
+      setProfile(saved)
+      setConfig(previous => ({ active: saved, profiles: { ...previous.profiles, [saved.printerName || 'default']: saved } }))
+      setDialogMode(null)
+      if (print) setPendingPrint(true)
+      else { printBusy.current = false; setPrinting(false) }
+    } catch (error) { printBusy.current = false; setPrinting(false); throw error }
+  }
+
+  useEffect(() => {
+    if (!pendingPrint || !layoutReady) return
+    setPendingPrint(false)
+    if (layoutError) { setPrintError(layoutError); printBusy.current = false; setPrinting(false); return }
+    void printWindow(profile).catch(error => setPrintError(getPrintErrorMessage(error)))
+      .finally(() => { printBusy.current = false; setPrinting(false) })
+  }, [pendingPrint, layoutReady, layoutError, profile])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') {
-        event.preventDefault()
-        void handlePrint()
+        event.preventDefault(); openPrintDialog()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handlePrint])
+  }, [openPrintDialog])
 
-  if (loading) {
-    return (
-      <div className="page-container">
-        <div className="loading">加载中...</div>
-      </div>
-    )
-  }
-
-  if (error || !order) {
-    return (
-      <div className="page-container">
-        <div className="error-message">{error || '订单不存在'}</div>
-        <button className="btn" onClick={() => navigate('/')}>
-          返回列表
-        </button>
-      </div>
-    )
-  }
+  if (loading) return <div className="page-container"><div className="loading">加载中...</div></div>
+  if (error || !order) return <div className="page-container">
+    <div className="error-message">{error || '订单不存在'}</div>
+    <button className="btn" onClick={() => navigate('/')}>返回列表</button>
+  </div>
 
   const totalQty = order.items.reduce((sum, it) => sum + (it.quantity || 0), 0)
   const totalAmount = order.items.reduce((sum, it) => sum + (it.amount || 0), 0)
@@ -207,30 +215,27 @@ const OrderPrint: React.FC = () => {
 
   return (
     <div className="print-page-wrapper">
-      {/* Non-printable toolbar */}
       <div className="no-print toolbar">
-        <button className="btn" onClick={() => navigate('/')}>
-          ← 返回列表
+        <button className="btn" disabled={printing} onClick={() => navigate('/')}>← 返回列表</button>
+        <button className="btn" disabled={printing} onClick={() => navigate(`/orders/${id}`)}>编辑订单</button>
+        <button className="btn print-settings-button" disabled={printing || !settingsReady} onClick={() => setDialogMode('settings')}>打印规格…</button>
+        <button className="btn btn-primary" disabled={printing || !settingsReady} onClick={openPrintDialog}>
+          {printing ? '正在准备 / 打印…' : '打印 (Ctrl+P)'}
         </button>
-        <button className="btn" onClick={() => navigate(`/orders/${id}`)}>
-          编辑订单
-        </button>
-        <button className="btn btn-primary" disabled={printing || !settingsReady || !!layoutError} onClick={handlePrint}>
-          {printing ? '正在打印…' : '打印 (Ctrl+P)'}
-        </button>
-        <label className="print-height-control">
-          纸张高度
-          <input aria-label="纸张高度" type="range" min="70" max="150" step="1" value={pageHeight}
-            disabled={printing || !settingsReady} onChange={event => setPageHeight(Number(event.target.value))} />
-          {pageHeight} mm
-        </label>
+        <span className="print-profile-summary">{geometry.widthMm} × {geometry.heightMm} mm · {profile.fontSizePt} 磅 · {pages.length} 页</span>
       </div>
       {(printError || layoutError) && <div role="alert" className="error-message no-print">{printError || layoutError}</div>}
+      <details className="print-driver-guide no-print">
+        <summary>本地打印设置建议（与当前预览一致）</summary>
+        <ol>{getDriverGuidance(profile).map(line => <li key={line}>{line}</li>)}</ol>
+      </details>
+      {dialogMode && <PrintSettingsDialog profile={profile} config={config} busy={printing}
+        printRequested={dialogMode === 'print'} onApply={applyProfile} onClose={() => setDialogMode(null)} />}
 
       {/* Print area */}
-      <div className="print-area" ref={printRef}>
+      <div className="print-area" ref={printRef} aria-busy={!layoutReady}>
         {pages.map((pageItems, pageIndex) => (
-          <div key={pageIndex} className="print-page">
+          <div key={pageIndex} className="print-page"><div className="print-page-content">
             {renderHeader()}
 
             <table className="items-table">
@@ -316,7 +321,7 @@ const OrderPrint: React.FC = () => {
             <div className="page-number">
               第 {pageIndex + 1} 页 / 共 {pages.length} 页
             </div>
-          </div>
+          </div></div>
         ))}
       </div>
     </div>
