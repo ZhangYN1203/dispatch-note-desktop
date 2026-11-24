@@ -1,6 +1,7 @@
 import { orderStatusLabels } from '../../electron/order-status'
 import type { OrderStatus } from '../../electron/order-status'
 import OrderActionDialog from '../components/OrderActionDialog'
+import OrderMoreDialog from '../components/OrderMoreDialog'
 import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchOrders, removeOrder } from '../utils/ipc'
@@ -16,6 +17,7 @@ const OrderList: React.FC = () => {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [action, setAction] = useState<{ order: Order; target: OrderStatus | 'history' } | null>(null)
+  const [moreOrder, setMoreOrder] = useState<Order | null>(null)
   const [archive, setArchive] = useState(0)
   const [deleteTarget, setDeleteTarget] = useState<Order | null>(null)
 
@@ -85,6 +87,7 @@ const OrderList: React.FC = () => {
 
       <BackupControls />
       {archive > 0 && <p className="error-message">保留了 {archive} 条旧版备用库存记录，尚未自动合并，请核对后通过生产库存的期初/入库操作录入。在用库存与订单发货均以生产库存为准。</p>}
+      <p className="order-list-guide">新订单：草稿 → 确认订单（不扣库存）→ 整单发货（扣库存）。历史单据的发货状态未记录，仅供查看和打印。</p>
       {error && <div className="error-message">{error}</div>}
 
       <div className="search-bar">
@@ -103,6 +106,7 @@ const OrderList: React.FC = () => {
           className="btn"
           onClick={() => {
             setSearch('')
+            setStatusFilter('')
             loadOrders()
           }}
         >
@@ -130,7 +134,7 @@ const OrderList: React.FC = () => {
               <th style={{ width: 80, textAlign: 'center' }}>商品数</th>
               <th style={{ width: 90, textAlign: 'center' }}>总数量</th>
               <th>发货单位</th>
-              <th style={{ width: 200 }}>操作</th>
+              <th style={{ width: 280 }}>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -145,10 +149,12 @@ const OrderList: React.FC = () => {
                 <td style={{ textAlign: 'center' }}>{order.totalQuantity ?? 0}</td>
                 <td>{order.sender || '-'}</td>
                 <td className="actions-cell">
-                  <div className="btn-group">
+                  <div className="btn-group order-row-actions">
+                    {order.status === 'draft' && <button className="btn btn-sm btn-primary" data-order-primary-action onClick={() => setAction({ order, target: 'confirmed' })}>确认订单</button>}
+                    {order.status === 'confirmed' && <button className="btn btn-sm btn-primary" data-order-primary-action onClick={() => setAction({ order, target: 'shipped' })}>整单发货</button>}
                     <button
                       className="btn btn-sm"
-                      onClick={() => navigate(`/orders/${order.id}`)}
+                      onClick={() => navigate(order.status === 'draft' ? `/orders/${order.id}` : `/orders/${order.id}/view`)}
                     >
                       {order.status === 'draft' ? '编辑' : '查看'}
                     </button>
@@ -158,14 +164,7 @@ const OrderList: React.FC = () => {
                     >
                       打印
                     </button>
-                    <details className="order-more-actions"><summary>更多</summary><div>
-                      <button className="btn btn-sm" onClick={() => navigate('/orders/new', { state: { copyFrom: order.id } })}>复制</button>
-                      {order.status === 'draft' && <button className="btn btn-sm" onClick={() => setAction({ order, target: 'confirmed' })}>确认订单</button>}
-                      {order.status === 'confirmed' && <><button className="btn btn-sm" onClick={() => setAction({ order, target: 'draft' })}>退回草稿</button><button className="btn btn-sm" onClick={() => setAction({ order, target: 'shipped' })}>整单发货</button></>}
-                      {['draft','confirmed','shipped'].includes(order.status) && <button className="btn btn-sm" onClick={() => setAction({ order, target: 'voided' })}>作废</button>}
-                      <button className="btn btn-sm" onClick={() => setAction({ order, target: 'history' })}>状态记录</button>
-                      {order.status === 'draft' && <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget(order)}>删除草稿</button>}
-                    </div></details>
+                    <button className="btn btn-sm order-more-trigger" aria-haspopup="dialog" aria-label={`更多操作 ${order.documentNo || order.orderNo}`} onClick={() => setMoreOrder(order)}>更多</button>
                   </div>
                 </td>
               </tr>
@@ -174,6 +173,10 @@ const OrderList: React.FC = () => {
         </table>
       )}
 
+      {moreOrder && <OrderMoreDialog order={moreOrder} onClose={() => setMoreOrder(null)}
+        onCopy={() => { setMoreOrder(null); navigate('/orders/new', { state: { copyFrom: moreOrder.id } }) }}
+        onAction={target => { setMoreOrder(null); setAction({ order: moreOrder, target }) }}
+        onDelete={() => { setMoreOrder(null); setDeleteTarget(moreOrder) }} />}
       {action && <OrderActionDialog order={action.order} action={action.target} onClose={() => setAction(null)} onDone={() => { setAction(null); void loadOrders(search) }} />}
       {deleteTarget && (
         <ConfirmDialog

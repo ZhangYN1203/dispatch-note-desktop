@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
-import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, useBlocker, Navigate } from 'react-router-dom'
 import {
   fetchOrderById, saveOrderWithItems,
   searchProducts, searchCustomers, getCustomerPrices,
   generateDocumentNo,
 } from '../utils/ipc'
+import OrderStatusPanel from '../components/OrderStatusPanel'
 import type { Order, OrderItem, Product, Customer, CustomerPrice } from '../types'
 
 interface EditableItem {
@@ -366,10 +367,7 @@ const OrderEdit: React.FC = () => {
     )
   }
 
-  if (locked) return <div className="page-container"><h1>只读单据</h1><p>此订单已确认、发货、作废或属于历史单据，不能直接修改。可在列表中退回草稿（未发货时），或复制为新订单。</p>
-    <button className="btn" onClick={() => navigate('/')}>返回列表</button>
-    <button className="btn" onClick={() => navigate(`/orders/${id}/print`)}>打印</button>
-    <button className="btn" onClick={() => navigate('/orders/new', { state: { copyFrom: Number(id) } })}>复制为新草稿</button></div>
+  if (locked) return <Navigate to={`/orders/${id}/view`} replace />
 
   return (
     <div className="page-container">
@@ -390,6 +388,8 @@ const OrderEdit: React.FC = () => {
 
       {error && <div className="error-message">{error}</div>}
 
+      <OrderStatusPanel status="draft" />
+      {!isNew && <div className="order-state-actions"><button className="btn" onClick={() => navigate(`/orders/${id}/view`)}>查看详情与状态操作</button></div>}
       <div className="form-container">
         <div className="form-section order-essential">
           <h2>客户与开单信息</h2>

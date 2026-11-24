@@ -100,7 +100,10 @@ async function run() {
   assert.match(await evaluate(`location.hash`),/orders\/new/);
   await evaluate(`window.confirm=()=>true; Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='取消').click()`);
   await until(`document.body.innerText.includes('备份全部数据')`);
-  await evaluate(`document.querySelector('.order-more-actions').open=true; Array.from(document.querySelectorAll('.order-more-actions button')).find(b=>b.textContent==='复制').click()`);
+  await until(`!!document.querySelector('.order-more-trigger')`);
+  await evaluate(`document.querySelector('.order-more-trigger').click()`);
+  await until(`!!document.querySelector('.order-more-dialog')`);
+  await evaluate(`Array.from(document.querySelectorAll('.order-more-dialog button')).find(b=>b.textContent==='复制为新草稿').click()`);
   await until(`document.querySelectorAll('button.btn-danger').length===11`);
   const copiedNo=await evaluate(`document.querySelector('[aria-label="单据编号"]').value`);
   assert.notEqual(copiedNo,'TEST-001');
@@ -288,8 +291,15 @@ async function run() {
   await evaluate(`location.hash='/'`); await until(`document.body.innerText.includes('FLOW-UI')`);
   const actionButton = async text => {
     // Closing an action dialog starts an async list refresh; wait for its new state.
-    await until(`Array.from(document.querySelectorAll('tbody tr')).some(r=>r.innerText.includes('FLOW-UI') && Array.from(r.querySelectorAll('button')).some(b=>b.textContent==='${text}'))`);
-    await evaluate(`(()=>{const row=Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('FLOW-UI'));row.querySelector('details').open=true;Array.from(row.querySelectorAll('button')).find(b=>b.textContent==='${text}').click()})()`);
+    await until(`Array.from(document.querySelectorAll('tbody tr')).some(r=>r.innerText.includes('FLOW-UI') && r.querySelector('.order-more-trigger'))`);
+    if (text==='作废') {
+      await evaluate(`Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('FLOW-UI')).querySelector('.order-more-trigger').click()`);
+      await until(`!!document.querySelector('.order-more-dialog')`);
+      await evaluate(`Array.from(document.querySelectorAll('.order-more-dialog button')).find(b=>b.textContent==='退货并作废').click()`);
+    } else {
+      await until(`Array.from(document.querySelectorAll('tbody tr')).some(r=>r.innerText.includes('FLOW-UI') && Array.from(r.querySelectorAll('button')).some(b=>b.textContent==='${text}'))`);
+      await evaluate(`(()=>{const row=Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('FLOW-UI'));Array.from(row.querySelectorAll('button')).find(b=>b.textContent==='${text}').click()})()`);
+    }
     await until(`!!document.querySelector('.order-action-dialog')`);
   };
   const confirmAction = async () => { await until(`!!document.querySelector('.order-action-dialog .btn-primary:not(:disabled)')`); await evaluate(`document.querySelector('.order-action-dialog .btn-primary').click()`); await until(`!document.querySelector('.order-action-dialog')`); };
@@ -316,6 +326,40 @@ async function run() {
   assert.equal(core.listInventory('productions').find(p=>p.id===productionId).status,'warehoused');
   assert.equal(core.listInventory('finished_products').find(p=>p.production_id===productionId).quantity,3);
   reports.push('旧生产界面的成品入库已通过统一事务，成品数量、任务状态及流水同步提交');
+
+  await evaluate(`window.__newModule.toggleNewSystem()`);
+  // Reproduce a bottom-row menu at a small window size and view an upgraded order.
+  const legacyIds = Array.from({length: 10}, (_, i) => handlers.saveOrderWithItems({
+    receiver:'历史演示客户', orderNo:'HISTORY-UI-'+i, sender:'历史演示发货方', remark:'历史备注',
+  }, [{productName:'历史商品快照',specification:'200g',packageSpec:'1x12',unit:'件',quantity:2,price:9.5}]).id);
+  for (const oldId of legacyIds) database.run("UPDATE orders SET status='legacy' WHERE id=?",[oldId]);
+  window.setContentSize(1000,640);
+  await evaluate(`location.hash='/order-summary'`); await until(`!document.querySelector('.order-action-dialog') && document.body.innerText.includes('订单汇总')`);
+  await evaluate(`location.hash='/'`); await until(`document.body.innerText.includes('HISTORY-UI-9')`);
+  await evaluate(`(()=>{const rows=Array.from(document.querySelectorAll('tbody tr'));const row=rows.find(r=>r.innerText.includes('HISTORY-UI-9'));row.scrollIntoView({block:'end'});const button=Array.from(row.querySelectorAll('button,summary')).find(b=>b.textContent.trim()==='更多');button.click();})()`);
+  await until(`!!document.querySelector('[role="dialog"]')`);
+  const menuVisible = await evaluate(`(()=>{const dialog=document.querySelector('[role="dialog"]'); const buttons=Array.from(dialog.querySelectorAll('button'));return buttons.every(b=>{const r=b.getBoundingClientRect();return r.top>=0 && r.bottom<=innerHeight && r.left>=0 && r.right<=innerWidth && b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))});})()`);
+  assert.equal(menuVisible,true,'all bottom-row actions must be visible and clickable');
+  await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent.trim()==='关闭').click()`);
+  const legacyId=legacyIds[9];
+  await evaluate(`location.hash='/orders/${legacyId}'`);
+  await until(`!!document.querySelector('[data-testid="order-detail"]')`);
+  const historicalText=await evaluate('document.body.innerText');
+  for(const expected of ['历史演示客户','历史演示发货方','历史商品快照','1x12','19.00','历史备注','发货状态未记录']) assert.ok(historicalText.includes(expected),expected);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-order-primary-action]').length`),0,'legacy records must not expose stock-changing actions');
+  assert.equal(handlers.getOrderById(legacyId).status,'legacy');
+  const visibleDraft=handlers.saveOrderWithItems({receiver:'明显状态客户',orderNo:'VISIBLE-DRAFT'},[{productName:'状态明细',quantity:1,price:1}]).id;
+  await evaluate(`location.hash='/'`); await until(`document.body.innerText.includes('VISIBLE-DRAFT')`);
+  assert.equal(await evaluate(`(()=>{const row=Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('VISIBLE-DRAFT'));return Array.from(row.querySelectorAll('[data-order-primary-action]')).some(b=>b.textContent==='确认订单' && b.getBoundingClientRect().width>0)})()`),true);
+  await evaluate(`location.hash='/orders/${visibleDraft}/view'`);
+  await until(`!!document.querySelector('[data-testid="order-detail"] [data-order-primary-action]')`);
+  await evaluate(`document.querySelector('[data-order-primary-action]').click()`);await confirmAction();
+  await until(`document.querySelector('[data-testid="order-detail"] [data-order-primary-action]')?.textContent==='整单发货'`);
+  assert.equal(handlers.getOrderById(visibleDraft).status,'confirmed');
+  await evaluate(`Array.from(document.querySelectorAll('[data-testid="order-detail"] button')).find(b=>b.textContent==='退回草稿').click()`);await confirmAction();
+  await until(`document.querySelector('[data-testid="order-detail"] [data-order-primary-action]')?.textContent==='确认订单'`);
+  assert.equal(handlers.getOrderById(visibleDraft).status,'draft');
+  reports.push('小窗口底行更多操作完整可见；历史详情展示快照和状态说明；列表及详情直接确认并可退回草稿');
   console.log(JSON.stringify({ passed: reports, artifactDirectory: root }, null, 2));
   app.exit(0);
 }

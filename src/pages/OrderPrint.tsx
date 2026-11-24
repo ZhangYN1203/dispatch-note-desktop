@@ -220,7 +220,7 @@ const OrderPrint: React.FC = () => {
     <div className="print-page-wrapper">
       <div className="no-print toolbar">
         <button className="btn" disabled={printing} onClick={() => navigate('/')}>← 返回列表</button>
-        <button className="btn" disabled={printing} onClick={() => navigate(`/orders/${id}`)}>编辑订单</button>
+        <button className="btn" disabled={printing} onClick={() => navigate(order.status === 'draft' ? `/orders/${id}` : `/orders/${id}/view`)}>{order.status === 'draft' ? '编辑草稿' : '查看详情与状态'}</button>
         <button className="btn print-settings-button" disabled={printing || !settingsReady} onClick={() => setDialogMode('settings')}>打印规格…</button>
         <button className="btn btn-primary" disabled={printing || !settingsReady} onClick={openPrintDialog}>
           {printing ? '正在准备 / 打印…' : '打印 (Ctrl+P)'}

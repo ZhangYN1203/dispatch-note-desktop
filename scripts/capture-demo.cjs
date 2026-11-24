@@ -41,13 +41,17 @@ async function capture() {
   const customer = database.queryOne('SELECT * FROM customers WHERE code=?', ['DEMO-C002']);
   handlers.updateCustomer(customer.id, { ...customer, priceTableId: table.id });
   handlers.updatePriceTableItem(table.id, products[0].productCode, 45);
+  const demoOrders=handlers.getOrders();
+  const historicalId=demoOrders.find(o=>o.orderNo==='DEMO-003').id;
+  database.run("UPDATE orders SET status='legacy' WHERE id=?",[historicalId]);
+  require('../dist-electron/order-workflow.js').transitionOrder(demoOrders.find(o=>o.orderNo==='DEMO-002').id,'confirmed');
   fs.mkdirSync(output, { recursive: true });
   const screenshot = async (name, route, ready) => {
     await js(`window.location.hash = ${JSON.stringify(route)}`);
     await until(ready);
     await js('document.fonts.ready');
     await wait(450);
-    const height = Math.min(1120, Math.ceil(await js(`(() => {
+    const height = Math.min(window.getContentSize()[1], Math.ceil(await js(`(() => {
       const pages = document.querySelectorAll('.print-page');
       const last = pages.length ? pages[pages.length-1] : document.querySelector('.page-container');
       return last ? last.getBoundingClientRect().bottom + 20 : 1120;
@@ -70,6 +74,12 @@ async function capture() {
   await until(`Array.from(document.querySelectorAll('span')).some(s=>s.textContent==='演示客户 B 价格表')`);
   await js(`Array.from(document.querySelectorAll('span')).find(s=>s.textContent==='演示客户 B 价格表').parentElement.click()`);
   await screenshot('prices', '/product-manager', `document.body.innerText.includes('示例调味酱')`);
+  window.setContentSize(1440,1500);
+  await screenshot('order-detail', `/orders/${historicalId}/view`, `!!document.querySelector('[data-testid="order-detail"]')`);
+  window.setContentSize(1000,640);
+  await js(`location.hash='/'`); await until(`!!document.querySelector('.order-more-trigger')`);
+  await js(`document.querySelector('.order-more-trigger').click()`); await until(`!!document.querySelector('.order-more-dialog')`); await wait(150);
+  fs.writeFileSync(path.join(output,'order-actions.png'),(await window.webContents.capturePage()).toPNG());
   console.log('Demo screenshots saved to docs/images; all data is fictional.');
   app.exit(0);
 }

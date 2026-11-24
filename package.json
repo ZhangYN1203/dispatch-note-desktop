@@ -1,6 +1,6 @@
 {
   "name": "dispatch-note-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "本地订单与发货单打印系统：客户定价、整单事务、Excel 导入导出、分页打印和完整备份",
   "main": "dist-electron/main.js",
   "scripts": {

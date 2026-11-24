@@ -2,6 +2,7 @@ import React from 'react'
 import { Route, Navigate, createHashRouter, createRoutesFromElements, RouterProvider } from 'react-router-dom'
 import OrderList from './pages/OrderList'
 import OrderEdit from './pages/OrderEdit'
+import OrderDetail from './pages/OrderDetail'
 import OrderPrint from './pages/OrderPrint'
 import ProductManager from './pages/ProductManager'
 import CustomerManager from './pages/CustomerManager'
@@ -11,6 +12,7 @@ const router = createHashRouter(createRoutesFromElements(<>
   <Route path="/" element={<OrderList />} />
   <Route path="/orders/new" element={<OrderEdit />} />
   <Route path="/orders/:id" element={<OrderEdit />} />
+  <Route path="/orders/:id/view" element={<OrderDetail />} />
   <Route path="/orders/:id/print" element={<OrderPrint />} />
   <Route path="/product-manager" element={<ProductManager />} />
   <Route path="/customer-manager" element={<CustomerManager />} />
