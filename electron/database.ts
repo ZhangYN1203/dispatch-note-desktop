@@ -37,6 +37,18 @@ export async function initDatabase(databasePath: string): Promise<void> {
     db = new SQL.Database()
   }
 
+  // Preserve the exact pre-upgrade file before any schema or persisted data changes.
+  if (!newDatabase) {
+    const oldOrders = db.exec('PRAGMA table_info(orders)')[0]?.values || []
+    const oldItems = db.exec('PRAGMA table_info(order_items)')[0]?.values || []
+    if (oldOrders.length && (!oldOrders.some(row => row[1] === 'status') || !oldItems.some(row => row[1] === 'packageSpec'))) {
+      const backupDir = path.join(dir, 'backups')
+      fs.mkdirSync(backupDir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      fs.copyFileSync(dbPath, path.join(backupDir, `${stamp}-schema-upgrade.db`), fs.constants.COPYFILE_EXCL)
+    }
+  }
+
   db.run('PRAGMA foreign_keys = ON')
 
   db.run(`
@@ -233,6 +245,26 @@ export async function initDatabase(databasePath: string): Promise<void> {
       createdAt TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     )
   `)
+
+  if (!queryAll('PRAGMA table_info(orders)').some(column => column.name === 'status')) {
+    withTransaction(() => getDb().run("ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'legacy'"))
+  }
+  getDb().run(`CREATE TABLE IF NOT EXISTS order_events (id INTEGER PRIMARY KEY AUTOINCREMENT, orderId INTEGER NOT NULL, fromStatus TEXT NOT NULL, toStatus TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL)`)
+  getDb().run(`CREATE TABLE IF NOT EXISTS order_shipments (orderId INTEGER NOT NULL, itemId INTEGER NOT NULL, stockId INTEGER NOT NULL, quantity REAL NOT NULL, returned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(orderId,itemId))`)
+  getDb().run(`CREATE TABLE IF NOT EXISTS inventory_requests (id TEXT PRIMARY KEY, signature TEXT NOT NULL, result TEXT NOT NULL)`)
+  getDb().run("CREATE UNIQUE INDEX IF NOT EXISTS idx_new_order_document ON orders(documentNo) WHERE status <> 'legacy' AND documentNo <> ''")
+
+  if (!queryAll('PRAGMA table_info(products)').some(column => column.name === 'packageSpec')) {
+    getDb().run("ALTER TABLE products ADD COLUMN packageSpec TEXT NOT NULL DEFAULT ''")
+  }
+
+  // Persist invoice packaging once; subsequent reads never join live catalog data.
+  if (!queryAll('PRAGMA table_info(order_items)').some(column => column.name === 'packageSpec')) {
+    withTransaction(() => {
+      getDb().run("ALTER TABLE order_items ADD COLUMN packageSpec TEXT NOT NULL DEFAULT ''")
+      getDb().run("UPDATE order_items SET packageSpec=COALESCE((SELECT products.packageSpec FROM products WHERE products.productCode=order_items.productCode LIMIT 1),'')")
+    })
+  }
 
   // ── Migration: add missing columns ──
   try { db.run('ALTER TABLE customers ADD COLUMN remark TEXT NOT NULL DEFAULT \'\'') } catch {}

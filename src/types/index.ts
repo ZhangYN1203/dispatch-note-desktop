@@ -1,6 +1,8 @@
-import type { PrintProfile, PrintConfiguration, LocalPrinter } from '../../electron/print-profile'
+import type { OrderStatus } from '../../electron/order-status'
+import type { PrintProfile, PrintConfiguration, LocalPrinter, PrintFavorite } from '../../electron/print-profile'
 
 export interface Order {
+  status: OrderStatus
   id: number
   documentNo: string
   orderNo: string
@@ -94,6 +96,14 @@ export interface PriceChangeLog {
 }
 
 export interface ElectronAPI {
+  inventoryOperation: (kind: string, data: Record<string, unknown>, requestId: string) => Promise<Record<string, unknown>>
+  transitionOrder: (id: number, target: OrderStatus, options?: { reason?: string; returnStock?: boolean; allocations?: { itemId: number; stockId: number }[] }) => Promise<{ success: boolean; status: OrderStatus }>
+  getOrderEvents: (id: number) => Promise<{ fromStatus: string; toStatus: string; reason: string; createdAt: string }[]>
+  getInventoryArchiveSummary: () => Promise<{ table: string; count: number }[]>
+  savePrintFavorite: (name: string, profile: PrintProfile) => Promise<PrintFavorite>
+  deletePrintFavorite: (id: string) => Promise<void>
+  getOrderDefaults: () => Promise<Partial<Pick<Order, 'sender' | 'senderPhone' | 'warehouse' | 'maker'>>>
+  saveOrderDefaults: (data: Partial<Pick<Order, 'sender' | 'senderPhone' | 'warehouse' | 'maker'>>) => Promise<void>
   saveOrderWithItems: (data: Partial<Order>, items: Partial<OrderItem>[], id?: number) => Promise<{ id: number }>
   inventoryMigrated: () => Promise<boolean>
   migrateInventory: (stores: Record<string, any[]>) => Promise<void>
@@ -159,7 +169,7 @@ export interface ElectronAPI {
   getPriceTableLogs: (priceTableId: number) => Promise<PriceChangeLog[]>
 
   // Order Summary
-  getOrderSummary: (dateFrom: string, dateTo: string) => Promise<{ details: any[]; summary: any[] }>
+  getOrderSummary: (dateFrom: string, dateTo: string, status?: string) => Promise<{ details: any[]; summary: any[] }>
 
   // Save file
   saveFile: (options: { defaultName: string; buffer: number[] }) => Promise<boolean>

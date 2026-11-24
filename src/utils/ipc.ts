@@ -241,9 +241,9 @@ export async function getPriceTableLogs(priceTableId: number): Promise<PriceChan
 
 // ── Order Summary ──
 
-export async function getOrderSummary(dateFrom: string, dateTo: string): Promise<{ details: any[]; summary: any[] }> {
+export async function getOrderSummary(dateFrom: string, dateTo: string, status?: string): Promise<{ details: any[]; summary: any[] }> {
   const api = getApi()
-  return api.getOrderSummary(dateFrom, dateTo)
+  return api.getOrderSummary(dateFrom, dateTo, status)
 }
 
 // ── Save File ──

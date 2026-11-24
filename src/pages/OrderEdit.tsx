@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
 import {
   fetchOrderById, saveOrderWithItems,
   searchProducts, searchCustomers, getCustomerPrices,
@@ -65,6 +65,7 @@ const productListCache: Product[] = []
 const OrderEdit: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const isNew = !id || id === 'new'
 
   const [order, setOrder] = useState<Partial<Order>>({ ...emptyOrder })
@@ -72,7 +73,13 @@ const OrderEdit: React.FC = () => {
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
+  const [defaultsNotice, setDefaultsNotice] = useState('')
+  const clean = useRef('')
+  const serialized = JSON.stringify([order, items])
+  const dirty = useRef(false)
+  dirty.current = !!clean.current && clean.current !== serialized
   const [error, setError] = useState('')
+  const [locked, setLocked] = useState(false)
   const [orderId, setOrderId] = useState<number | null>(null)
 
   // ── Customer info (bound together) ──
@@ -92,15 +99,36 @@ const OrderEdit: React.FC = () => {
 
   const productInputRef = useRef<HTMLInputElement>(null)
 
-  // ── Auto-generate document number for new orders ──
+  const blocker = useBlocker(() => dirty.current && !savingRef.current)
   useEffect(() => {
-    if (isNew) {
-      generateDocumentNo().then(no => {
-        setOrder(prev => ({ ...prev, documentNo: no }))
-      }).catch(() => {})
-    }
-  }, [isNew])
-
+    if (blocker.state !== 'blocked') return
+    if (window.confirm('订单尚未保存，确定放弃修改并离开吗？')) blocker.proceed()
+    else blocker.reset()
+  }, [blocker])
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty.current) { event.preventDefault(); event.returnValue = '' } }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [])
+  useEffect(() => {
+    if (!loading && !clean.current) clean.current = serialized
+  }, [loading, serialized])
+  useEffect(() => {
+    if (!isNew) return
+    let active = true
+    const source = (location.state as { copyFrom?: number } | null)?.copyFrom
+    setLoading(true)
+    Promise.all([window.electronAPI.getOrderDefaults(), generateDocumentNo(), source ? fetchOrderById(source) : Promise.resolve(null)])
+      .then(async ([defaults, number, data]) => {
+        if (!active) return
+        setLocked(false); setOrderId(null)
+        setOrder({ ...emptyOrder, ...defaults, ...(data || {}), id: undefined, documentNo: number, orderNo: '', date: new Date().toLocaleDateString('sv-SE') })
+        setItems(data?.items.map(item => ({ ...item, id: undefined, _tempId: --tempIdCounter, packageSpec: item.packageSpec || '' })) || [])
+        clean.current = source ? 'copied-unsaved' : ''
+        if (data) { const customers = await searchCustomers(data.receiver); if (active && customers[0]) { setSelectedCustomer(customers[0]); setCustomerCodeSearch(`${customers[0].code} - ${customers[0].name}`); const prices = await getCustomerPrices(customers[0].code); if (active) setCustomerPriceMap(Object.fromEntries(prices.map(price => [price.productCode, price.price]))) } }
+      }).catch(error => { if (active) setError(error.message) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [isNew, location.state])
   // ── Load all customers on mount ──
   useEffect(() => {
     searchCustomers('').then(setCustomerResults).catch(() => {})
@@ -238,6 +266,8 @@ const OrderEdit: React.FC = () => {
         } catch (_) {}
       }
 
+      clean.current = ''
+      setLocked(data.status !== 'draft')
       setOrderId(data.id)
       setItems(
         data.items.map((it: OrderItem) => ({
@@ -315,6 +345,7 @@ const OrderEdit: React.FC = () => {
       }
 
       await saveOrderWithItems(dataToSave, items, isNew ? undefined : orderId ?? undefined)
+      clean.current = JSON.stringify([order, items]); dirty.current = false
       navigate('/')
     } catch (err: any) {
       setError(err.message || '保存失败')
@@ -324,6 +355,7 @@ const OrderEdit: React.FC = () => {
     }
   }
 
+  const totalAmount = items.reduce((sum, it) => sum + (it.amount || 0), 0)
   const totalQuantity = items.reduce((sum, it) => sum + (it.quantity || 0), 0)
 
   if (loading) {
@@ -333,6 +365,11 @@ const OrderEdit: React.FC = () => {
       </div>
     )
   }
+
+  if (locked) return <div className="page-container"><h1>只读单据</h1><p>此订单已确认、发货、作废或属于历史单据，不能直接修改。可在列表中退回草稿（未发货时），或复制为新订单。</p>
+    <button className="btn" onClick={() => navigate('/')}>返回列表</button>
+    <button className="btn" onClick={() => navigate(`/orders/${id}/print`)}>打印</button>
+    <button className="btn" onClick={() => navigate('/orders/new', { state: { copyFrom: Number(id) } })}>复制为新草稿</button></div>
 
   return (
     <div className="page-container">
@@ -354,48 +391,9 @@ const OrderEdit: React.FC = () => {
       {error && <div className="error-message">{error}</div>}
 
       <div className="form-container">
-        {/* ── Basic Info Section ── */}
-        <div className="form-section">
-          <h2>基础信息</h2>
+        <div className="form-section order-essential">
+          <h2>客户与开单信息</h2>
           <div className="form-grid">
-            <div className="form-field">
-              <label>单据编号</label>
-              <input
-                value={order.documentNo || ''}
-                readOnly
-                style={{ background: '#f5f5f5', color: '#666', fontWeight: 600 }}
-                title="自动生成"
-              />
-            </div>
-            <div className="form-field">
-              <label>订单号</label>
-              <input
-                value={order.orderNo || ''}
-                onChange={e => updateField('orderNo', e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label>日期</label>
-              <input
-                type="date"
-                value={order.date || ''}
-                onChange={e => updateField('date', e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label>发货单位</label>
-              <input
-                value={order.sender || ''}
-                onChange={e => updateField('sender', e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label>电话</label>
-              <input
-                value={order.senderPhone || ''}
-                onChange={e => updateField('senderPhone', e.target.value)}
-              />
-            </div>
             {/* Customer selector */}
             <div className="form-field" style={{ position: 'relative' }}>
               <label>客户编码</label>
@@ -437,60 +435,39 @@ const OrderEdit: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="form-field">
-              <label>收货单位</label>
-              <input value={order.receiver || ''} readOnly style={{ background: '#f5f5f5', color: '#666' }} />
-            </div>
-            <div className="form-field">
-              <label>收货联系人</label>
-              <input value={order.receiverContact || ''} readOnly style={{ background: '#f5f5f5', color: '#666' }} />
-            </div>
-            <div className="form-field">
-              <label>收货电话</label>
-              <input value={order.receiverPhone || ''} readOnly style={{ background: '#f5f5f5', color: '#666' }} />
-            </div>
-            <div className="form-field">
-              <label>收货地址</label>
-              <input value={order.receiverAddress || ''} readOnly style={{ background: '#f5f5f5', color: '#666' }} />
-            </div>
-            <div className="form-field">
-              <label>承运车号</label>
-              <input value={order.carrierVehicle || ''} onChange={e => updateField('carrierVehicle', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>承运人</label>
-              <input value={order.carrierName || ''} onChange={e => updateField('carrierName', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>发货仓库</label>
-              <input value={order.warehouse || ''} onChange={e => updateField('warehouse', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>出厂时间</label>
-              <input type="datetime-local" value={order.outTime || ''} onChange={e => updateField('outTime', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>吨位</label>
-              <input value={order.tonnage || ''} onChange={e => updateField('tonnage', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>里程</label>
-              <input value={order.mileage || ''} onChange={e => updateField('mileage', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>制单人</label>
-              <input value={order.maker || ''} onChange={e => updateField('maker', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>复核</label>
-              <input value={order.reviewer || ''} onChange={e => updateField('reviewer', e.target.value)} />
-            </div>
-            <div className="form-field">
-              <label>备注</label>
-              <textarea value={order.remark || ''} onChange={e => updateField('remark', e.target.value)} />
-            </div>
+            <label className="form-field">收货单位<input aria-label="收货单位" type="text" value={order.receiver || ''} readOnly /></label>
+            <label className="form-field">日期<input aria-label="日期" type="date" value={order.date || ''} onChange={e => updateField('date', e.target.value)} /></label>
+            <label className="form-field">单据编号<input aria-label="单据编号" type="text" value={order.documentNo || ''} readOnly /></label>
+            <label className="form-field">订单号<input aria-label="订单号" type="text" value={order.orderNo || ''} onChange={e => updateField('orderNo', e.target.value)} /></label>
+            <label className="form-field">发货单位<input aria-label="发货单位" type="text" value={order.sender || ''} onChange={e => updateField('sender', e.target.value)} /></label>
+            <label className="form-field">发货电话<input aria-label="发货电话" type="text" value={order.senderPhone || ''} onChange={e => updateField('senderPhone', e.target.value)} /></label>
+            <label className="form-field">发货仓库<input aria-label="发货仓库" type="text" value={order.warehouse || ''} onChange={e => updateField('warehouse', e.target.value)} /></label>
+            <label className="form-field">制单人<input aria-label="制单人" type="text" value={order.maker || ''} onChange={e => updateField('maker', e.target.value)} /></label>
+            <label className="form-field">收货地址<input aria-label="收货地址" type="text" value={order.receiverAddress || ''} readOnly /></label>
+            <label className="form-field">收货联系人<input aria-label="收货联系人" type="text" value={order.receiverContact || ''} readOnly /></label>
+            <label className="form-field">收货电话<input aria-label="收货电话" type="text" value={order.receiverPhone || ''} readOnly /></label>
+          </div>
+          <div className="order-default-actions">
+            <button className="btn btn-sm" onClick={async () => {
+              try {
+                await window.electronAPI.saveOrderDefaults({ sender: order.sender || '', senderPhone: order.senderPhone || '', warehouse: order.warehouse || '', maker: order.maker || '' })
+                setDefaultsNotice('已保存，下一张新订单将使用这些默认值。')
+              } catch (error) { setError((error as Error).message) }
+            }}>保存为开单默认值</button>
+            <span role="status">{defaultsNotice || '只保存发货单位、发货电话、仓库和制单人，不保存客户与商品。'}</span>
           </div>
         </div>
+        <details className="form-section order-more">
+          <summary>运输、签收与备注（可选）</summary><div className="form-grid">
+            <label className="form-field">承运车号<input aria-label="承运车号" type="text" value={order.carrierVehicle || ''} onChange={e => updateField('carrierVehicle', e.target.value)} /></label>
+            <label className="form-field">承运人<input aria-label="承运人" type="text" value={order.carrierName || ''} onChange={e => updateField('carrierName', e.target.value)} /></label>
+            <label className="form-field">出厂时间<input aria-label="出厂时间" type="datetime-local" value={order.outTime || ''} onChange={e => updateField('outTime', e.target.value)} /></label>
+            <label className="form-field">吨位<input aria-label="吨位" type="text" value={order.tonnage || ''} onChange={e => updateField('tonnage', e.target.value)} /></label>
+            <label className="form-field">里程<input aria-label="里程" type="text" value={order.mileage || ''} onChange={e => updateField('mileage', e.target.value)} /></label>
+            <label className="form-field">复核<input aria-label="复核" type="text" value={order.reviewer || ''} onChange={e => updateField('reviewer', e.target.value)} /></label>
+            <label className="form-field">备注<input aria-label="备注" type="text" value={order.remark || ''} onChange={e => updateField('remark', e.target.value)} /></label>
+          </div>
+        </details>
 
         {/* ── Items Section ── */}
         <div className="form-section">
@@ -742,14 +719,11 @@ const OrderEdit: React.FC = () => {
                 </tbody>
                 <tfoot>
                   <tr style={{ fontWeight: 600, background: '#fafafa' }}>
-                    <td colSpan={4}>合计</td>
-                    <td></td>
-                    <td></td>
+                    <td colSpan={5}>合计</td>
                     <td style={{ textAlign: 'right', paddingRight: 12 }}>{totalQuantity.toFixed(2)}</td>
                     <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
+                    <td style={{ textAlign: 'right', paddingRight: 12 }}>¥{totalAmount.toFixed(2)}</td>
+                    <td colSpan={2}></td>
                   </tr>
                 </tfoot>
               </table>

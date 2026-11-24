@@ -172,6 +172,27 @@
     return getAllFromStore(storeName).then(function(rows) { return rows.filter(function(row) { return row[indexName] === value; }); });
   }
 
+  var inventoryBusy = false;
+  function runInventoryOperation(kind, data, modalId, message) {
+    if (inventoryBusy) return;
+    inventoryBusy = true;
+    var modal = modalId && document.getElementById(modalId);
+    if (modal) modal.querySelectorAll('button').forEach(function(button) { button.disabled = true; });
+    return inventoryReady.then(function() {
+      return window.electronAPI.inventoryOperation(kind, data, crypto.randomUUID());
+    }).then(function() {
+      showToast(message);
+      if (modal) modal.remove();
+      return loadAllData();
+    }).then(function() { renderPage(state.currentPage); }).catch(function(error) {
+      showToast(error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ''), 'error');
+      return loadAllData();
+    }).finally(function() {
+      inventoryBusy = false;
+      if (modal) modal.querySelectorAll('button').forEach(function(button) { button.disabled = false; });
+    });
+  }
+
   // ============================================================
   // 库存日志记录
   // ============================================================
@@ -481,52 +502,13 @@
   }
 
   function confirmInbound() {
-    var materialId = parseInt(document.getElementById('inbound-material-id').value);
-    var qty = parseFloat(document.getElementById('inbound-qty').value);
-    var price = parseFloat(document.getElementById('inbound-price').value) || 0;
-    var total = parseFloat(document.getElementById('inbound-total').value) || 0;
-    var supplierId = document.getElementById('inbound-supplier').value ? parseInt(document.getElementById('inbound-supplier').value) : null;
-    var operator = document.getElementById('inbound-operator').value || '管理员';
-    var remark = document.getElementById('inbound-remark').value || '';
-
-    if (!materialId) { showToast('请选择原材料', 'error'); return; }
-    if (!qty || qty <= 0) { showToast('请输入有效的入库数量', 'error'); return; }
-
-    var material = state.materials.find(function(m) { return m.id === materialId; });
-    if (!material) { showToast('原材料不存在', 'error'); return; }
-
-    var beforeQty = material.quantity || 0;
-    var afterQty = beforeQty + qty;
-
-    // 更新原材料库存
-    material.quantity = afterQty;
-    material.updated_at = now();
-
-    var inboundRecord = {
-      material_id: materialId,
-      quantity: qty,
-      unit_price: price,
-      total_price: total,
-      supplier_id: supplierId,
-      operator: operator,
-      remark: remark,
-      created_at: now()
-    };
-
-    updateInStore('materials', material).then(function() {
-      return addToStore('material_inbound', inboundRecord);
-    }).then(function() {
-      return addStockLog('material', materialId, material.name, 'inbound', qty, beforeQty, afterQty, operator, remark);
-    }).then(function() {
-      showToast('入库成功！' + material.name + ' +' + qty + ' ' + (material.unit || ''));
-      document.getElementById('inbound-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('入库失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('material.inbound', {
+      materialId: Number(document.getElementById('inbound-material-id').value), quantity: Number(document.getElementById('inbound-qty').value),
+      unitPrice: Number(document.getElementById('inbound-price').value), supplierId: Number(document.getElementById('inbound-supplier').value) || null,
+      operator: document.getElementById('inbound-operator').value, remark: document.getElementById('inbound-remark').value
+    }, 'inbound-modal', '入库成功，库存与流水已一起保存');
   }
+
 
   // ============================================================
   // 原材料出库弹窗
@@ -567,55 +549,13 @@
   }
 
   function confirmOutbound() {
-    var materialId = parseInt(document.getElementById('outbound-material-id').value);
-    var qty = parseFloat(document.getElementById('outbound-qty').value);
-    var workshopId = document.getElementById('outbound-workshop-id').value ? parseInt(document.getElementById('outbound-workshop-id').value) : null;
-    var operator = document.getElementById('outbound-operator').value || '管理员';
-    var purpose = document.getElementById('outbound-purpose').value || '';
-    var remark = document.getElementById('outbound-remark').value || '';
-
-    if (!materialId) { showToast('请选择原材料', 'error'); return; }
-    if (!qty || qty <= 0) { showToast('请输入有效的出库数量', 'error'); return; }
-    if (!workshopId) { showToast('请选择车间', 'error'); return; }
-
-    var workshop = state.workshops.find(function(w) { return w.id === workshopId; });
-    var material = state.materials.find(function(m) { return m.id === materialId; });
-    if (!material) { showToast('原材料不存在', 'error'); return; }
-
-    var beforeQty = material.quantity || 0;
-    if (qty > beforeQty) { showToast('库存不足！当前库存: ' + beforeQty, 'error'); return; }
-
-    var afterQty = beforeQty - qty;
-    material.quantity = afterQty;
-    material.updated_at = now();
-
-    var remarkWithWorkshop = (workshop ? '车间: ' + workshop.name + '; ' : '') + (remark || purpose);
-
-    var outboundRecord = {
-      material_id: materialId,
-      quantity: qty,
-      workshop_id: workshopId,
-      workshop_name: workshop ? workshop.name : '',
-      purpose: purpose,
-      operator: operator,
-      remark: remark,
-      created_at: now()
-    };
-
-    updateInStore('materials', material).then(function() {
-      return addToStore('material_outbound', outboundRecord);
-    }).then(function() {
-      return addStockLog('material', materialId, material.name, 'outbound', -qty, beforeQty, afterQty, operator, remarkWithWorkshop);
-    }).then(function() {
-      showToast('出库成功！' + material.name + ' -' + qty + ' ' + (material.unit || ''));
-      document.getElementById('outbound-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('出库失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('material.outbound', {
+      materialId: Number(document.getElementById('outbound-material-id').value), quantity: Number(document.getElementById('outbound-qty').value),
+      workshopId: Number(document.getElementById('outbound-workshop-id').value), purpose: document.getElementById('outbound-purpose').value,
+      operator: document.getElementById('outbound-operator').value, remark: document.getElementById('outbound-remark').value
+    }, 'outbound-modal', '出库成功，库存与流水已一起保存');
   }
+
 
   // ============================================================
   // 新增原材料弹窗
@@ -1252,46 +1192,18 @@
   // ============================================================
   function startProduction(id) {
     if (!confirm('确定开始该生产任务吗？')) return;
-
-    var p = state.productions.find(function(x) { return x.id === id; });
-    if (!p) return;
-
-    p.status = 'production';
-    p.start_time = now();
-    p.updated_at = now();
-
-    updateInStore('productions', p).then(function() {
-      showToast('生产任务已开始！');
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('操作失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('production.start', {productionId:id}, null, '生产任务已开始');
   }
+
 
   // ============================================================
   // 完成生产
   // ============================================================
   function completeProduction(id) {
     if (!confirm('确定完成该生产任务吗？')) return;
-
-    var p = state.productions.find(function(x) { return x.id === id; });
-    if (!p) return;
-
-    p.status = 'completed';
-    p.finish_time = now();
-    p.updated_at = now();
-
-    updateInStore('productions', p).then(function() {
-      showToast('生产任务已完成！');
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('操作失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('production.complete', {productionId:id}, null, '生产任务已完成');
   }
+
 
   // ============================================================
   // 生产领料
@@ -1328,65 +1240,13 @@
   }
 
   function confirmAddMaterialToProduction(productionId) {
-    var materialId = parseInt(document.getElementById('pm-material-id').value);
-    var qty = parseFloat(document.getElementById('pm-qty').value);
-    var workshopId = document.getElementById('pm-workshop-id').value ? parseInt(document.getElementById('pm-workshop-id').value) : null;
-    var operator = document.getElementById('pm-operator').value || '管理员';
-    var remark = document.getElementById('pm-remark').value || '';
-
-    if (!materialId) { showToast('请选择原材料', 'error'); return; }
-    if (!qty || qty <= 0) { showToast('请输入有效的领料数量', 'error'); return; }
-    if (!workshopId) { showToast('请选择车间', 'error'); return; }
-
-    var workshop = state.workshops.find(function(w) { return w.id === workshopId; });
-    var material = state.materials.find(function(m) { return m.id === materialId; });
-    if (!material) { showToast('原材料不存在', 'error'); return; }
-
-    var beforeQty = material.quantity || 0;
-    if (qty > beforeQty) { showToast('库存不足！当前库存: ' + beforeQty, 'error'); return; }
-
-    var afterQty = beforeQty - qty;
-    material.quantity = afterQty;
-    material.updated_at = now();
-
-    var pmRecord = {
-      production_id: productionId,
-      material_id: materialId,
-      quantity: qty,
-      workshop_id: workshopId,
-      workshop_name: workshop ? workshop.name : '',
-      created_at: now()
-    };
-
-    var outboundRecord = {
-      material_id: materialId,
-      quantity: qty,
-      production_id: productionId,
-      workshop_id: workshopId,
-      workshop_name: workshop ? workshop.name : '',
-      operator: operator,
-      remark: '生产领料: ' + remark,
-      created_at: now()
-    };
-
-    var remarkWithWorkshop = (workshop ? '车间: ' + workshop.name + '; ' : '') + '生产领料: ' + remark;
-
-    updateInStore('materials', material).then(function() {
-      return addToStore('production_materials', pmRecord);
-    }).then(function() {
-      return addToStore('material_outbound', outboundRecord);
-    }).then(function() {
-      return addStockLog('material', materialId, material.name, 'production_use', -qty, beforeQty, afterQty, operator, remarkWithWorkshop);
-    }).then(function() {
-      showToast('领料成功！' + material.name + ' -' + qty + ' ' + (material.unit || ''));
-      document.getElementById('add-pm-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('领料失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('material.outbound', {
+      productionId: productionId, materialId: Number(document.getElementById('pm-material-id').value),
+      quantity: Number(document.getElementById('pm-qty').value), workshopId: Number(document.getElementById('pm-workshop-id').value),
+      operator: document.getElementById('pm-operator').value, remark: document.getElementById('pm-remark').value
+    }, 'add-pm-modal', '领料成功，库存、用料与流水已一起保存');
   }
+
 
   // ============================================================
   // 生产详情
@@ -1452,6 +1312,8 @@
       '<h3>🏗️ 成品入库 - ' + escapeHtml(p.order_no || '') + '</h3>' +
       '<div class="modal-body">' +
       '<div class="form-grid">' +
+      '<div class="form-field"><label>关联商品编码</label><input id="fp-product-code" placeholder="可选，与订单商品编码一致"></div>' +
+      '<div class="form-field"><label>单位</label><input id="fp-unit" value="件"></div>' +
       '<div class="form-field"><label>产品名称 *</label><input type="text" id="fp-name" placeholder="成品名称" value="' + escapeHtml(p.order_no || '') + '成品"></div>' +
       '<div class="form-field"><label>入库数量 *</label><input type="number" id="fp-qty" min="0.01" step="0.01" value="1"></div>' +
       '<div class="form-field"><label>操作人员</label><input type="text" id="fp-operator" value="管理员"></div>' +
@@ -1467,77 +1329,14 @@
   }
 
   function confirmWarehouse(productionId) {
-    var p = state.productions.find(function(x) { return x.id === productionId; });
-    if (!p) return;
-
-    var name = document.getElementById('fp-name').value.trim();
-    var qty = parseFloat(document.getElementById('fp-qty').value);
-    var operator = document.getElementById('fp-operator').value || '管理员';
-    var remark = document.getElementById('fp-remark').value.trim();
-
-    if (!name) { showToast('请输入产品名称', 'error'); return; }
-    if (!qty || qty <= 0) { showToast('请输入有效的入库数量', 'error'); return; }
-
-    // 检查是否已有该订单的成品记录
-    getByIndex('finished_products', 'order_id', p.order_id || 0).then(function(existing) {
-      if (existing && existing.length > 0) {
-        // 更新现有成品
-        var fp = existing[0];
-        var beforeQty = fp.quantity || 0;
-        fp.quantity = beforeQty + qty;
-        fp.updated_at = now();
-
-        return updateInStore('finished_products', fp).then(function() {
-          return { fp: fp, beforeQty: beforeQty, isNew: false };
-        });
-      } else {
-        // 新建成品记录
-        var fp = {
-          product_name: name,
-          quantity: qty,
-          order_id: p.order_id || 0,
-          order_no: p.order_no,
-          production_id: productionId,
-          remark: remark,
-          created_at: now(),
-          updated_at: now()
-        };
-        return addToStore('finished_products', fp).then(function(id) {
-          fp.id = id;
-          return { fp: fp, beforeQty: 0, isNew: true };
-        });
-      }
-    }).then(function(result) {
-      // 更新生产状态
-      p.status = 'warehoused';
-      p.updated_at = now();
-      return updateInStore('productions', p).then(function() {
-        return result;
-      });
-    }).then(function(result) {
-      // 记录日志
-      var log = {
-        product_id: result.fp.id,
-        type: 'inbound',
-        quantity: qty,
-        order_id: p.order_id || 0,
-        operator: operator,
-        remark: '生产入库: ' + remark,
-        created_at: now()
-      };
-      return addToStore('finished_product_logs', log).then(function() {
-        return addStockLog('finished_product', result.fp.id, result.fp.product_name, 'inbound', qty, result.beforeQty, result.beforeQty + qty, operator, '生产入库');
-      });
-    }).then(function() {
-      showToast('成品入库成功！');
-      document.getElementById('warehouse-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('入库失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('production.warehouse', {
+      productionId: productionId, productName: document.getElementById('fp-name').value,
+      productCode: document.getElementById('fp-product-code').value,
+      unit: document.getElementById('fp-unit').value, quantity: Number(document.getElementById('fp-qty').value),
+      operator: document.getElementById('fp-operator').value, remark: document.getElementById('fp-remark').value
+    }, 'warehouse-modal', '成品入库成功，库存、生产状态与流水已一起保存');
   }
+
 
   // ============================================================
   // 出库发货弹窗
@@ -1581,63 +1380,13 @@
   }
 
   function confirmShip(productionId) {
-    var p = state.productions.find(function(x) { return x.id === productionId; });
-    if (!p) return;
-
-    var productId = parseInt(document.getElementById('ship-product-id').value);
-    var qty = parseFloat(document.getElementById('ship-qty').value);
-    var workshopId = document.getElementById('ship-workshop-id').value ? parseInt(document.getElementById('ship-workshop-id').value) : null;
-    var operator = document.getElementById('ship-operator').value || '管理员';
-    var remark = document.getElementById('ship-remark').value.trim();
-
-    if (!productId) { showToast('请选择成品', 'error'); return; }
-    if (!qty || qty <= 0) { showToast('请输入有效的出库数量', 'error'); return; }
-    if (!workshopId) { showToast('请选择车间', 'error'); return; }
-
-    var workshop = state.workshops.find(function(w) { return w.id === workshopId; });
-    var fp = state.finishedProducts.find(function(x) { return x.id === productId; });
-    if (!fp) { showToast('成品不存在', 'error'); return; }
-
-    var beforeQty = fp.quantity || 0;
-    if (qty > beforeQty) { showToast('库存不足！当前库存: ' + beforeQty, 'error'); return; }
-
-    var afterQty = beforeQty - qty;
-    fp.quantity = afterQty;
-    fp.updated_at = now();
-
-    p.status = 'shipped';
-    p.updated_at = now();
-
-    var remarkWithWorkshop = (workshop ? '车间: ' + workshop.name + '; ' : '') + '出库发货: ' + remark;
-
-    var log = {
-      product_id: productId,
-      type: 'outbound',
-      quantity: qty,
-      order_id: p.order_id || 0,
-      workshop_id: workshopId,
-      workshop_name: workshop ? workshop.name : '',
-      operator: operator,
-      remark: remarkWithWorkshop,
-      created_at: now()
-    };
-
-    updateInStore('finished_products', fp).then(function() {
-      return updateInStore('productions', p);
-    }).then(function() {
-      return addToStore('finished_product_logs', log);
-    }).then(function() {
-      return addStockLog('finished_product', fp.id, fp.product_name, 'outbound', -qty, beforeQty, afterQty, operator, remarkWithWorkshop);
-    }).then(function() {
-      showToast('出库成功！' + fp.product_name + ' -' + qty);
-      document.getElementById('ship-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('出库失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('product.outbound', {
+      productionId: productionId, productId: Number(document.getElementById('ship-product-id').value),
+      quantity: Number(document.getElementById('ship-qty').value), workshopId: Number(document.getElementById('ship-workshop-id').value),
+      operator: document.getElementById('ship-operator').value, remark: document.getElementById('ship-remark').value
+    }, 'ship-modal', '出库已保存；关联新订单请从订单列表发货');
   }
+
 
   // ============================================================
   // 成品管理页面
@@ -1785,54 +1534,12 @@
   }
 
   function confirmManualOutbound(productId) {
-    var fp = state.finishedProducts.find(function(x) { return x.id === productId; });
-    if (!fp) return;
-
-    var qty = parseFloat(document.getElementById('mo-qty').value);
-    var workshopId = document.getElementById('mo-workshop-id').value ? parseInt(document.getElementById('mo-workshop-id').value) : null;
-    var operator = document.getElementById('mo-operator').value || '管理员';
-    var remark = document.getElementById('mo-remark').value.trim();
-
-    if (!qty || qty <= 0) { showToast('请输入有效的出库数量', 'error'); return; }
-    if (!workshopId) { showToast('请选择车间', 'error'); return; }
-
-    var workshop = state.workshops.find(function(w) { return w.id === workshopId; });
-
-    var beforeQty = fp.quantity || 0;
-    if (qty > beforeQty) { showToast('库存不足！当前库存: ' + beforeQty, 'error'); return; }
-
-    var afterQty = beforeQty - qty;
-    fp.quantity = afterQty;
-    fp.updated_at = now();
-
-    var remarkWithWorkshop = (workshop ? '车间: ' + workshop.name + '; ' : '') + '手动出库: ' + remark;
-
-    var log = {
-      product_id: productId,
-      type: 'outbound',
-      quantity: qty,
-      order_id: fp.order_id || 0,
-      workshop_id: workshopId,
-      workshop_name: workshop ? workshop.name : '',
-      operator: operator,
-      remark: remarkWithWorkshop,
-      created_at: now()
-    };
-
-    updateInStore('finished_products', fp).then(function() {
-      return addToStore('finished_product_logs', log);
-    }).then(function() {
-      return addStockLog('finished_product', fp.id, fp.product_name, 'outbound', -qty, beforeQty, afterQty, operator, remarkWithWorkshop);
-    }).then(function() {
-      showToast('出库成功！');
-      document.getElementById('manual-outbound-modal').remove();
-      return loadAllData();
-    }).then(function() {
-      renderPage(state.currentPage);
-    }).catch(function(err) {
-      showToast('出库失败: ' + err.message, 'error');
-    });
+    return runInventoryOperation('product.outbound', {
+      productId: productId, quantity: Number(document.getElementById('mo-qty').value), workshopId: Number(document.getElementById('mo-workshop-id').value),
+      operator: document.getElementById('mo-operator').value, remark: document.getElementById('mo-remark').value
+    }, 'manual-outbound-modal', '出库成功，库存与流水已一起保存');
   }
+
 
   // ============================================================
   // 收发存汇总表（可查看 + 打印）

@@ -1,10 +1,13 @@
+import { executeInventoryOperation, saveInventoryEntity, removeInventoryEntity } from './inventory-service'
+import { transitionOrder, getOrderEvents } from './order-workflow'
+import { getOrderDefaults, saveOrderDefaults } from './order-defaults'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import { initDatabase, automaticBackup, createBackup, restoreDatabase } from './database'
+import { initDatabase, automaticBackup, createBackup, restoreDatabase, queryOne } from './database'
 import { listInventory, putInventory, deleteInventory, migrateInventory, inventoryMigrated } from './inventory'
 import { getPrintOptions } from './print-options'
-import { getPrintConfiguration, savePrinterProfile } from './printer-config'
+import { getPrintConfiguration, savePrinterProfile, savePrintFavorite, deletePrintFavorite } from './printer-config'
 import { normalizePrintProfile } from './print-profile'
 import {
   createOrder,
@@ -50,28 +53,6 @@ import {
   undoLastPriceChange,
   getPriceChangeLogs,
   getOrderSummary,
-  // ── New handlers ──
-  getWorkshops,
-  createWorkshop,
-  updateWorkshop,
-  deleteWorkshop,
-  getRawMaterials,
-  searchRawMaterials,
-  createRawMaterial,
-  updateRawMaterial,
-  deleteRawMaterial,
-  generateInboundNo,
-  generateOutboundNo,
-  generateProductInboundNo,
-  createMaterialInbound,
-  getMaterialInbounds,
-  createMaterialOutbound,
-  getMaterialOutbounds,
-  createProductInbound,
-  getProductInbounds,
-  getInventoryLogs,
-  getRawMaterialReport,
-  getProductReport,
   // ── Print Settings ──
   getPrintSettings,
   setPrintSettings,
@@ -115,8 +96,8 @@ function registerIpcHandlers() {
     if (!startupBackedUp) { automaticBackup(); startupBackedUp = true }
   })
   ipcMain.handle('inventory:list', (_event, store) => listInventory(store))
-  ipcMain.handle('inventory:put', (_event, store, data, insertOnly) => putInventory(store, data, insertOnly))
-  ipcMain.handle('inventory:delete', (_event, store, id) => deleteInventory(store, id))
+  ipcMain.handle('inventory:put', (_event, store, data, insertOnly) => saveInventoryEntity(store, data, insertOnly))
+  ipcMain.handle('inventory:delete', (_event, store, id) => removeInventoryEntity(store, id))
   ipcMain.handle('backup:create', async () => {
     if (!inventoryMigrated()) throw new Error('库存数据尚未迁移完成，请稍后重试')
     const { dialog } = require('electron')
@@ -144,6 +125,13 @@ function registerIpcHandlers() {
     restoreDatabase(result.filePaths[0])
     return true
   })
+  ipcMain.handle('orders:getDefaults', () => getOrderDefaults())
+  ipcMain.handle('orders:saveDefaults', (_event, data) => saveOrderDefaults(data))
+  ipcMain.handle('inventory:operation', (_event, kind, data, requestId) => executeInventoryOperation(kind, data, requestId))
+  ipcMain.handle('orders:transition', (_event, id, target, options) => transitionOrder(id, target, options))
+  ipcMain.handle('orders:events', (_event, id) => getOrderEvents(id))
+  ipcMain.handle('inventory:archiveSummary', () => ['workshops','raw_materials','material_inbound','material_outbound','product_inbound','inventory_log']
+    .map(table => ({ table, count: queryOne(`SELECT COUNT(*) AS count FROM ${table}`)?.count || 0 })).filter(row => row.count > 0))
   // Order handlers
   ipcMain.handle('db:getOrders', async (_event, filters?: { search?: string }) => {
     return getOrders(filters)
@@ -187,6 +175,8 @@ function registerIpcHandlers() {
     return generateDocumentNo(date)
   })
 
+  ipcMain.handle('printing:saveFavorite', (_event, name, profile) => savePrintFavorite(name, profile))
+  ipcMain.handle('printing:deleteFavorite', (_event, id) => deletePrintFavorite(id))
   ipcMain.handle('printing:getConfiguration', () => getPrintConfiguration())
   ipcMain.handle('printing:saveProfile', (_event, profile) => savePrinterProfile(profile))
   ipcMain.handle('printing:listPrinters', async () => {
@@ -355,8 +345,8 @@ function registerIpcHandlers() {
   })
 
   // Order Summary
-  ipcMain.handle('db:getOrderSummary', async (_event, dateFrom: string, dateTo: string) => {
-    return getOrderSummary(dateFrom, dateTo)
+  ipcMain.handle('db:getOrderSummary', async (_event, dateFrom: string, dateTo: string, status?: string) => {
+    return getOrderSummary(dateFrom, dateTo, status)
   })
 
   // Save file dialog
@@ -371,41 +361,7 @@ function registerIpcHandlers() {
     return true
   })
 
-  // ── Workshop handlers ──
-  ipcMain.handle('db:getWorkshops', async () => getWorkshops())
-  ipcMain.handle('db:createWorkshop', async (_event, data: any) => createWorkshop(data))
-  ipcMain.handle('db:updateWorkshop', async (_event, id: number, data: any) => updateWorkshop(id, data))
-  ipcMain.handle('db:deleteWorkshop', async (_event, id: number) => deleteWorkshop(id))
-
-  // ── Raw Material handlers ──
-  ipcMain.handle('db:getRawMaterials', async () => getRawMaterials())
-  ipcMain.handle('db:searchRawMaterials', async (_event, keyword?: string) => searchRawMaterials(keyword))
-  ipcMain.handle('db:createRawMaterial', async (_event, data: any) => createRawMaterial(data))
-  ipcMain.handle('db:updateRawMaterial', async (_event, id: number, data: any) => updateRawMaterial(id, data))
-  ipcMain.handle('db:deleteRawMaterial', async (_event, id: number) => deleteRawMaterial(id))
-
-  // ── Material Inbound handlers ──
-  ipcMain.handle('db:generateInboundNo', async (_event, date?: string) => generateInboundNo(date))
-  ipcMain.handle('db:createMaterialInbound', async (_event, data: any) => createMaterialInbound(data))
-  ipcMain.handle('db:getMaterialInbounds', async (_event, filters?: any) => getMaterialInbounds(filters))
-
-  // ── Material Outbound handlers ──
-  ipcMain.handle('db:generateOutboundNo', async (_event, date?: string) => generateOutboundNo(date))
-  ipcMain.handle('db:createMaterialOutbound', async (_event, data: any) => createMaterialOutbound(data))
-  ipcMain.handle('db:getMaterialOutbounds', async (_event, filters?: any) => getMaterialOutbounds(filters))
-
-  // ── Product Inbound handlers ──
-  ipcMain.handle('db:generateProductInboundNo', async (_event, date?: string) => generateProductInboundNo(date))
-  ipcMain.handle('db:createProductInbound', async (_event, data: any) => createProductInbound(data))
-  ipcMain.handle('db:getProductInbounds', async (_event, filters?: any) => getProductInbounds(filters))
-
-  // ── Inventory Log handlers ──
-  ipcMain.handle('db:getInventoryLogs', async (_event, filters?: any) => getInventoryLogs(filters))
-
-  // ── Warehouse Report handlers ──
-  ipcMain.handle('db:getRawMaterialReport', async (_event, dateFrom: string, dateTo: string) => getRawMaterialReport(dateFrom, dateTo))
-  ipcMain.handle('db:getProductReport', async (_event, dateFrom: string, dateTo: string) => getProductReport(dateFrom, dateTo))
-
+  // Legacy SQL inventory tables are archived. All active operations use the production inventory service.
   // ── Settings handlers ──
   ipcMain.handle('settings:get', async () => getPrintSettings())
   ipcMain.handle('settings:set', async (_event, data: Record<string, string | number>) => {

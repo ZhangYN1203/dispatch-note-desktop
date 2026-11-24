@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { getDriverGuidance, getPrintErrorMessage, getPageGeometry, getPresetProfile, normalizePrintProfile } from '../../electron/print-profile'
-import type { LocalPrinter, PaperPreset, PrintConfiguration, PrintProfile } from '../../electron/print-profile'
+import type { LocalPrinter, PaperPreset, PrintConfiguration, PrintProfile, PrintFavorite } from '../../electron/print-profile'
 
 interface Props {
   profile: PrintProfile
   config: PrintConfiguration
   printRequested: boolean
   busy: boolean
-  onApply: (profile: PrintProfile, print: boolean) => Promise<void>
+  onApply: (profile: PrintProfile, print: boolean, calibration?: boolean) => Promise<void>
   onClose: () => void
 }
 
-export default function PrintSettingsDialog({ profile, config, printRequested, busy, onApply, onClose }: Props) {
+export default function PrintSettingsDialog({ profile, config, printRequested, busy: printBusy, onApply, onClose }: Props) {
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
+  const busy = printBusy || favoriteBusy
   const [draft, setDraft] = useState(profile)
+  const [favorites, setFavorites] = useState<PrintFavorite[]>(config.favorites)
+  const [favoriteName, setFavoriteName] = useState('')
+  const [favoriteId, setFavoriteId] = useState('')
   const [printers, setPrinters] = useState<LocalPrinter[]>([])
   const [printerWarning, setPrinterWarning] = useState('')
   const [error, setError] = useState('')
@@ -23,6 +28,7 @@ export default function PrintSettingsDialog({ profile, config, printRequested, b
     restoreFocus.current = document.activeElement as HTMLElement
     heading.current?.focus()
     let active = true
+    window.electronAPI.getPrintConfiguration().then(c => { if (active) setFavorites(c.favorites) }).catch(() => {})
     window.electronAPI.listPrinters().then(items => {
       if (!active) return
       setPrinters(items)
@@ -36,6 +42,8 @@ export default function PrintSettingsDialog({ profile, config, printRequested, b
       ...(['widthMm', 'heightMm'].includes(field) ? { preset: 'custom' as const } : {}) }))
   }
   const choosePrinter = (name: string) => {
+    setFavoriteId('')
+    setFavoriteName('')
     setDraft(config.profiles[name || 'default'] ?? { ...draft, printerName: name })
     setError('')
   }
@@ -50,9 +58,9 @@ export default function PrintSettingsDialog({ profile, config, printRequested, b
         disabled={busy} onChange={event => change(field, event.target.value === '' ? NaN : Number(event.target.value))} />
     </label>
   )
-  const submit = async (print: boolean) => {
+  const submit = async (print: boolean, calibration = false) => {
     if (!valid || busy) return
-    try { await onApply(valid, print) } catch (error) { setError(getPrintErrorMessage(error)) }
+    try { await onApply(valid, print, calibration) } catch (error) { setError(getPrintErrorMessage(error)) }
   }
   return <div className="print-settings-overlay no-print" onKeyDown={event => {
     if (event.key === 'Escape' && !busy) { event.stopPropagation(); onClose() }
@@ -70,6 +78,24 @@ export default function PrintSettingsDialog({ profile, config, printRequested, b
       </div>
       <p>选择纸张与打印机，应用后重新分页。每台打印机会分别记住最近使用的规格。</p>
       {printerWarning && <p className="print-setting-warning" role="status">{printerWarning}</p>}
+      <div className="print-favorites">
+        <label>收藏方案<select aria-label="收藏方案" disabled={busy} value={favoriteId} onChange={event => {
+          const favorite = favorites.find(item => item.id === event.target.value)
+          setFavoriteId(event.target.value)
+          if (favorite) { setDraft(favorite.profile); setFavoriteName(favorite.name) }
+        }}><option value="">选择已收藏方案</option>{favorites.filter(item => item.profile.printerName === draft.printerName).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>方案名称<input aria-label="方案名称" disabled={busy} value={favoriteName} maxLength={60} onChange={event => setFavoriteName(event.target.value)} /></label>
+        <button className="btn" disabled={busy || !valid || !favoriteName.trim()} onClick={async () => {
+          if (busy) return
+          setFavoriteBusy(true)
+          try { const saved = await window.electronAPI.savePrintFavorite(favoriteName, valid!); setFavorites(previous => [...previous.filter(item => item.id !== saved.id), saved]); setFavoriteId(saved.id) } catch (error) { setError(getPrintErrorMessage(error)) } finally { setFavoriteBusy(false) }
+        }}>收藏当前规格</button>
+        <button className="btn" disabled={busy || !favoriteId} onClick={async () => {
+          if (busy) return
+          setFavoriteBusy(true)
+          try { await window.electronAPI.deletePrintFavorite(favoriteId); setFavorites(previous => previous.filter(item => item.id !== favoriteId)); setFavoriteId('') } catch (error) { setError(getPrintErrorMessage(error)) } finally { setFavoriteBusy(false) }
+        }}>删除收藏</button>
+      </div>
       <div className="print-settings-grid">
         <label className="print-setting-field">打印机
           <select aria-label="打印机" value={draft.printerName} disabled={busy} onChange={event => choosePrinter(event.target.value)}>
@@ -110,6 +136,7 @@ export default function PrintSettingsDialog({ profile, config, printRequested, b
       </section>}
       {(error || validation) && <p className="error-message" role="alert">{error || validation}</p>}
       <div className="print-settings-actions">
+        <button className="btn" disabled={busy || !valid} onClick={() => void submit(true, true)}>打印校准页（1份）</button>
         <button className="btn" disabled={busy || !valid} onClick={() => void submit(false)}>应用并查看预览</button>
         {printRequested && <button className="btn btn-primary" disabled={busy || !valid} onClick={() => void submit(true)}>{busy ? '正在准备…' : '确认规格，进入系统打印'}</button>}
       </div>

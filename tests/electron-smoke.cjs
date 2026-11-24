@@ -84,13 +84,34 @@ async function run() {
   await until(`document.querySelectorAll('button.btn-danger').length === ${rowCount + 1}`);
   await evaluate(`Array.from(document.querySelectorAll('button.btn-danger')).at(-1).click()`);
   assert.equal(await evaluate(`document.querySelectorAll('button.btn-danger').length`), rowCount, 'new-row temporary ID must not collide with a loaded row');
-  await evaluate(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '取消').click()`);
+  await evaluate(`window.__leaveConfirmCount=0; window.confirm=()=>{window.__leaveConfirmCount++; return true}; Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '取消').click()`);
   await until('!!document.querySelector(".page-header h1") && document.body.innerText.includes("备份全部数据")');
   assert.equal(await evaluate(`window.electronAPI.getOrderById(${id}).then(o => o.items.length)`), 11);
   reports.push('取消编辑保留 11 条原始明细');
-  await evaluate(`window.electronAPI.putInventory('materials', {id: 1, name: '烟测原料', quantity: 10})`);
+  assert.ok(await evaluate('window.__leaveConfirmCount >= 1'),'leaving edited order asks first');
+  await evaluate(`window.electronAPI.saveOrderDefaults({sender:'开单默认测试单位',warehouse:'默认库',maker:'默认制单人'})`);
+  await evaluate(`document.querySelector('.page-header .btn-primary').click()`);
+  await until(`document.querySelector('[aria-label="发货单位"]')?.value === '开单默认测试单位'`);
+  assert.equal(await evaluate(`document.querySelector('details.order-more').open`),false);
+  await evaluate(`(()=>{const input=document.querySelector('[aria-label="制单人"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'已修改');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await wait(30);
+  await evaluate(`window.confirm=()=>false; Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='取消').click()`);
+  await wait(100);
+  assert.match(await evaluate(`location.hash`),/orders\/new/);
+  await evaluate(`window.confirm=()=>true; Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='取消').click()`);
+  await until(`document.body.innerText.includes('备份全部数据')`);
+  await evaluate(`document.querySelector('.order-more-actions').open=true; Array.from(document.querySelectorAll('.order-more-actions button')).find(b=>b.textContent==='复制').click()`);
+  await until(`document.querySelectorAll('button.btn-danger').length===11`);
+  const copiedNo=await evaluate(`document.querySelector('[aria-label="单据编号"]').value`);
+  assert.notEqual(copiedNo,'TEST-001');
+  await evaluate(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='取消').click()`);
+  await until(`document.body.innerText.includes('备份全部数据')`);
+  assert.equal(handlers.getOrders().length,1,'cancelling a copy does not create an order');
+  reports.push('开单默认值、可选信息折叠、未保存离开确认和复制新单号通过');
+
+  require(path.join(appRoot,'dist-electron/inventory.js')).putInventory('materials', {id:1,name:'烟测原料',quantity:10});
   await evaluate('window.electronAPI.createBackup()');
-  await evaluate(`window.electronAPI.putInventory('materials', {id: 1, name: '烟测原料', quantity: 5})`);
+  require(path.join(appRoot,'dist-electron/inventory.js')).putInventory('materials', {id:1,name:'烟测原料',quantity:5});
   await evaluate('window.electronAPI.restoreBackup()');
   assert.equal(await evaluate(`window.electronAPI.listInventory('materials').then(rows => rows[0].quantity)`), 10);
   reports.push('真实 IPC 备份恢复包含库存');
@@ -241,6 +262,60 @@ async function run() {
   await evaluate(`window.location.hash = '/orders/${emptyId}/print'`); await ready();
   assert.equal(await pdfFor(defaultProfile,'print-empty'),1);
   reports.push('空订单打印一页');
+
+  await openSettings();
+  await field('方案名称','联单方案');
+  await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent==='收藏当前规格').click()`);
+  await until(`document.querySelector('[aria-label="收藏方案"]').options.length===2`);
+  await field('纸张规格','a4',true); await field('方案名称','A4方案');
+  await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent==='收藏当前规格').click()`);
+  await until(`document.querySelector('[aria-label="收藏方案"]').options.length===3`);
+  const favorite = await evaluate(`window.electronAPI.getPrintConfiguration().then(c=>c.favorites.find(f=>f.name==='联单方案').id)`);
+  await field('收藏方案',favorite,true); await apply();
+  await openSettings();
+  await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent.includes('打印校准页')).click()`);
+  await until(`!document.querySelector('[role="dialog"]') && document.body.innerText.includes('打印规格校准页') && document.querySelector('.print-area')?.getAttribute('aria-busy')==='false'`);
+  await until(`!!document.querySelector('.toolbar .btn-primary:not(:disabled)')`);
+  assert.equal(lastOptions.copies,1);
+  const square = await evaluate(`document.querySelector('.calibration-sheet rect[width="10"]').getBoundingClientRect().width`);
+  assert.ok(Math.abs(square-10*96/25.4)<1);
+  assert.equal(await pdfFor(defaultProfile,'calibration'),1);
+  reports.push('同机多方案收藏与应用通过；校准页10mm方框、单份打印和PDF尺寸通过');
+
+  const core = require(path.join(appRoot,'dist-electron/inventory.js'));
+  const stockId = core.putInventory('finished_products',{product_name:'UI发货成品',product_code:'FLOW-P',unit:'件',quantity:10});
+  const flowId = await evaluate(`window.electronAPI.saveOrderWithItems({receiver:'测试客户',orderNo:'FLOW-UI'},[{productCode:'FLOW-P',productName:'UI发货成品',unit:'件',quantity:2,price:5}]).then(o=>o.id)`);
+  await evaluate(`location.hash='/'`); await until(`document.body.innerText.includes('FLOW-UI')`);
+  const actionButton = async text => {
+    // Closing an action dialog starts an async list refresh; wait for its new state.
+    await until(`Array.from(document.querySelectorAll('tbody tr')).some(r=>r.innerText.includes('FLOW-UI') && Array.from(r.querySelectorAll('button')).some(b=>b.textContent==='${text}'))`);
+    await evaluate(`(()=>{const row=Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('FLOW-UI'));row.querySelector('details').open=true;Array.from(row.querySelectorAll('button')).find(b=>b.textContent==='${text}').click()})()`);
+    await until(`!!document.querySelector('.order-action-dialog')`);
+  };
+  const confirmAction = async () => { await until(`!!document.querySelector('.order-action-dialog .btn-primary:not(:disabled)')`); await evaluate(`document.querySelector('.order-action-dialog .btn-primary').click()`); await until(`!document.querySelector('.order-action-dialog')`); };
+  await actionButton('确认订单'); await confirmAction();
+  assert.equal(core.listInventory('finished_products').find(p=>p.id===stockId).quantity,10);
+  await actionButton('整单发货');
+  const lineId = handlers.getOrderById(flowId).items[0].id;
+  await until(`!!document.querySelector('[aria-label="发货库存-${lineId}"]')`);
+  await field(`发货库存-${lineId}`,stockId,true); await confirmAction();
+  assert.equal(core.listInventory('finished_products').find(p=>p.id===stockId).quantity,8);
+  await actionButton('作废'); await field('作废原因','测试整单退回');
+  await evaluate(`document.querySelector('.order-action-dialog input[type="checkbox"]').click()`); await confirmAction();
+  assert.equal(core.listInventory('finished_products').find(p=>p.id===stockId).quantity,10);
+  assert.equal(handlers.getOrderById(flowId).status,'voided');
+  reports.push('订单列表UI确认不扣库存，选择批次整单发货扣减，确认退回作废恢复库存');
+
+  const productionId=await evaluate(`window.electronAPI.putInventory('productions',{order_id:0,order_no:'外部演示任务',status:'pending',manager:'测试'},true)`);
+  await evaluate(`window.electronAPI.inventoryOperation('production.start',{productionId:${productionId}},'ui-start')`);
+  await evaluate(`window.electronAPI.inventoryOperation('production.complete',{productionId:${productionId}},'ui-complete')`);
+  await evaluate(`window.__newModule.toggleNewSystem()`);
+  await wait(150);
+  await evaluate(`window.__newModule.showWarehouseDialog(${productionId});document.getElementById('fp-name').value='UI生产入库';document.getElementById('fp-qty').value='3';`);
+  await evaluate(`window.__newModule.confirmWarehouse(${productionId})`);
+  assert.equal(core.listInventory('productions').find(p=>p.id===productionId).status,'warehoused');
+  assert.equal(core.listInventory('finished_products').find(p=>p.production_id===productionId).quantity,3);
+  reports.push('旧生产界面的成品入库已通过统一事务，成品数量、任务状态及流水同步提交');
   console.log(JSON.stringify({ passed: reports, artifactDirectory: root }, null, 2));
   app.exit(0);
 }

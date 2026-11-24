@@ -1,3 +1,5 @@
+import { orderStatusLabels } from '../../electron/order-status'
+import type { OrderStatus } from '../../electron/order-status'
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getOrderSummary, saveFile } from '../utils/ipc'
@@ -8,6 +10,7 @@ const OrderSummary: React.FC = () => {
 
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -27,7 +30,7 @@ const OrderSummary: React.FC = () => {
     try {
       setLoading(true)
       setError('')
-      const result = await getOrderSummary(dateFrom, dateTo)
+      const result = await getOrderSummary(dateFrom, dateTo, statusFilter)
       setDetails(result.details)
       setSummary(result.summary)
       setSearched(true)
@@ -42,6 +45,7 @@ const OrderSummary: React.FC = () => {
     const wb = XLSX.utils.book_new()
     const ws = XLSX.utils.json_to_sheet(details.map((r, i) => ({
       '序号': i + 1,
+      '状态': orderStatusLabels[r.status as OrderStatus] || r.status,
       '订单号': r.orderNo || r.documentNo || '',
       '客户编码': r.customerCode,
       '客户名称': r.customerName,
@@ -97,6 +101,8 @@ const OrderSummary: React.FC = () => {
 
       {error && <div className="error-message">{error}</div>}
 
+      <p>按订单日期汇总，默认包含未发货单但不含作废单。可选择“已发货”查看已发货订单口径，实际库存以库存流水为准。</p>
+      <label>状态 <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setSearched(false); setDetails([]); setSummary([]) }}><option value="">有效订单（不含作废）</option>{Object.entries(orderStatusLabels).filter(([key]) => key !== 'voided').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       {/* 时间段选择 */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>

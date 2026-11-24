@@ -15,7 +15,8 @@ export interface PrintProfile {
   copies: number
 }
 export interface LocalPrinter { name: string; displayName: string; isDefault: boolean }
-export interface PrintConfiguration { active: PrintProfile; profiles: Record<string, PrintProfile>; warning?: string }
+export interface PrintFavorite { id: string; name: string; profile: PrintProfile }
+export interface PrintConfiguration { favorites: PrintFavorite[]; active: PrintProfile; profiles: Record<string, PrintProfile>; warning?: string }
 
 export function getPrintErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)

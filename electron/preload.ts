@@ -9,9 +9,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteInventory: (store: string, id: number) => ipcRenderer.invoke('inventory:delete', store, id),
   createBackup: () => ipcRenderer.invoke('backup:create'),
   restoreBackup: () => ipcRenderer.invoke('backup:restore'),
+  savePrintFavorite: (name: string, profile: unknown) => ipcRenderer.invoke('printing:saveFavorite', name, profile),
+  deletePrintFavorite: (id: string) => ipcRenderer.invoke('printing:deleteFavorite', id),
   getPrintConfiguration: () => ipcRenderer.invoke('printing:getConfiguration'),
   savePrinterProfile: (profile: unknown) => ipcRenderer.invoke('printing:saveProfile', profile),
   listPrinters: () => ipcRenderer.invoke('printing:listPrinters'),
+  inventoryOperation: (kind: string, data: unknown, requestId: string) => ipcRenderer.invoke('inventory:operation', kind, data, requestId),
+  transitionOrder: (id: number, target: string, options?: unknown) => ipcRenderer.invoke('orders:transition', id, target, options),
+  getOrderEvents: (id: number) => ipcRenderer.invoke('orders:events', id),
+  getInventoryArchiveSummary: () => ipcRenderer.invoke('inventory:archiveSummary'),
+  getOrderDefaults: () => ipcRenderer.invoke('orders:getDefaults'),
+  saveOrderDefaults: (data: unknown) => ipcRenderer.invoke('orders:saveDefaults', data),
   // Customer Management
   createCustomer: (data: any) => ipcRenderer.invoke('db:createCustomer', data),
   updateCustomer: (id: number, data: any) => ipcRenderer.invoke('db:updateCustomer', id, data),
@@ -71,45 +79,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPriceTableLogs: (priceTableId: number) => ipcRenderer.invoke('db:getPriceTableLogs', priceTableId),
 
   // Order Summary
-  getOrderSummary: (dateFrom: string, dateTo: string) => ipcRenderer.invoke('db:getOrderSummary', dateFrom, dateTo),
+  getOrderSummary: (dateFrom: string, dateTo: string, status?: string) => ipcRenderer.invoke('db:getOrderSummary', dateFrom, dateTo, status),
 
   // Save file dialog
   saveFile: (options: { defaultName: string; buffer: number[] }) => ipcRenderer.invoke('dialog:saveFile', options),
-
-  // ── Workshop ──
-  getWorkshops: () => ipcRenderer.invoke('db:getWorkshops'),
-  createWorkshop: (data: any) => ipcRenderer.invoke('db:createWorkshop', data),
-  updateWorkshop: (id: number, data: any) => ipcRenderer.invoke('db:updateWorkshop', id, data),
-  deleteWorkshop: (id: number) => ipcRenderer.invoke('db:deleteWorkshop', id),
-
-  // ── Raw Materials ──
-  getRawMaterials: () => ipcRenderer.invoke('db:getRawMaterials'),
-  searchRawMaterials: (keyword?: string) => ipcRenderer.invoke('db:searchRawMaterials', keyword),
-  createRawMaterial: (data: any) => ipcRenderer.invoke('db:createRawMaterial', data),
-  updateRawMaterial: (id: number, data: any) => ipcRenderer.invoke('db:updateRawMaterial', id, data),
-  deleteRawMaterial: (id: number) => ipcRenderer.invoke('db:deleteRawMaterial', id),
-
-  // ── Material Inbound ──
-  generateInboundNo: (date?: string) => ipcRenderer.invoke('db:generateInboundNo', date),
-  createMaterialInbound: (data: any) => ipcRenderer.invoke('db:createMaterialInbound', data),
-  getMaterialInbounds: (filters?: any) => ipcRenderer.invoke('db:getMaterialInbounds', filters),
-
-  // ── Material Outbound ──
-  generateOutboundNo: (date?: string) => ipcRenderer.invoke('db:generateOutboundNo', date),
-  createMaterialOutbound: (data: any) => ipcRenderer.invoke('db:createMaterialOutbound', data),
-  getMaterialOutbounds: (filters?: any) => ipcRenderer.invoke('db:getMaterialOutbounds', filters),
-
-  // ── Product Inbound ──
-  generateProductInboundNo: (date?: string) => ipcRenderer.invoke('db:generateProductInboundNo', date),
-  createProductInbound: (data: any) => ipcRenderer.invoke('db:createProductInbound', data),
-  getProductInbounds: (filters?: any) => ipcRenderer.invoke('db:getProductInbounds', filters),
-
-  // ── Inventory Log ──
-  getInventoryLogs: (filters?: any) => ipcRenderer.invoke('db:getInventoryLogs', filters),
-
-  // ── Warehouse Report ──
-  getRawMaterialReport: (dateFrom: string, dateTo: string) => ipcRenderer.invoke('db:getRawMaterialReport', dateFrom, dateTo),
-  getProductReport: (dateFrom: string, dateTo: string) => ipcRenderer.invoke('db:getProductReport', dateFrom, dateTo),
 
   // ── Settings ──
   getPrintSettings: () => ipcRenderer.invoke('settings:get'),

@@ -4,6 +4,7 @@ import { fetchOrderById, printWindow } from '../utils/ipc'
 import type { Order, OrderItem } from '../types'
 import { DEFAULT_PRINT_PROFILE, getDriverGuidance, getPageGeometry, getPrintErrorMessage } from '../../electron/print-profile'
 import type { PrintConfiguration, PrintProfile } from '../../electron/print-profile'
+import CalibrationSheet from '../components/CalibrationSheet'
 import PrintSettingsDialog from '../components/PrintSettingsDialog'
 import '../styles/print.css'
 
@@ -16,16 +17,17 @@ const OrderPrint: React.FC = () => {
   const [error, setError] = useState('')
   const [printError, setPrintError] = useState('')
   const [profile, setProfile] = useState<PrintProfile>({ ...DEFAULT_PRINT_PROFILE })
-  const [config, setConfig] = useState<PrintConfiguration>({ active: profile, profiles: {} })
+  const [config, setConfig] = useState<PrintConfiguration>({ active: profile, profiles: {}, favorites: [] })
   const [settingsReady, setSettingsReady] = useState(false)
   const [printing, setPrinting] = useState(false)
   const [dialogMode, setDialogMode] = useState<'settings' | 'print' | null>(null)
+  const [calibration, setCalibration] = useState(false)
   const [pendingPrint, setPendingPrint] = useState(false)
   const printBusy = useRef(false)
   const [pagination, setPagination] = useState({ key: '', rows: 10 })
   const [layout, setLayout] = useState({ key: '', ready: false, error: '' })
   const geometry = getPageGeometry(profile)
-  const layoutKey = JSON.stringify([profile, order?.id, order?.items])
+  const layoutKey = JSON.stringify([profile, order?.id, order?.items, calibration])
   const rowsPerPage = pagination.key === layoutKey ? pagination.rows : profile.maxRowsPerPage
   const layoutReady = layout.key === layoutKey && layout.ready
   const layoutError = layout.key === layoutKey ? layout.error : ''
@@ -102,13 +104,14 @@ const OrderPrint: React.FC = () => {
     if (!printBusy.current && settingsReady && order) setDialogMode('print')
   }, [settingsReady, order])
 
-  const applyProfile = async (next: PrintProfile, print: boolean) => {
+  const applyProfile = async (next: PrintProfile, print: boolean, calibrate = false) => {
     if (printBusy.current) return
     printBusy.current = true; setPrinting(true); setPrintError('')
     try {
       const saved = await window.electronAPI.savePrinterProfile(next)
       setProfile(saved)
-      setConfig(previous => ({ active: saved, profiles: { ...previous.profiles, [saved.printerName || 'default']: saved } }))
+      setCalibration(calibrate)
+      setConfig(previous => ({ ...previous, active: saved, profiles: { ...previous.profiles, [saved.printerName || 'default']: saved } }))
       setDialogMode(null)
       if (print) setPendingPrint(true)
       else { printBusy.current = false; setPrinting(false) }
@@ -119,9 +122,9 @@ const OrderPrint: React.FC = () => {
     if (!pendingPrint || !layoutReady) return
     setPendingPrint(false)
     if (layoutError) { setPrintError(layoutError); printBusy.current = false; setPrinting(false); return }
-    void printWindow(profile).catch(error => setPrintError(getPrintErrorMessage(error)))
+    void printWindow(calibration ? { ...profile, copies: 1 } : profile).catch(error => setPrintError(getPrintErrorMessage(error)))
       .finally(() => { printBusy.current = false; setPrinting(false) })
-  }, [pendingPrint, layoutReady, layoutError, profile])
+  }, [pendingPrint, layoutReady, layoutError, profile, calibration])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -232,9 +235,10 @@ const OrderPrint: React.FC = () => {
       {dialogMode && <PrintSettingsDialog profile={profile} config={config} busy={printing}
         printRequested={dialogMode === 'print'} onApply={applyProfile} onClose={() => setDialogMode(null)} />}
 
+      {calibration && <button className="btn no-print" onClick={() => setCalibration(false)}>返回单据预览</button>}
       {/* Print area */}
       <div className="print-area" ref={printRef} aria-busy={!layoutReady}>
-        {pages.map((pageItems, pageIndex) => (
+        {calibration ? <div className="print-page"><div className="print-page-content"><CalibrationSheet profile={profile} /></div></div> : pages.map((pageItems, pageIndex) => (
           <div key={pageIndex} className="print-page"><div className="print-page-content">
             {renderHeader()}
 

@@ -1,3 +1,4 @@
+import { assertDraftOrder } from './order-workflow'
 import { queryAll, queryOne, run, withTransaction } from './database'
 
 // ── Auto-generate document number ──
@@ -9,10 +10,8 @@ export function generateDocumentNo(date?: string): string {
 
   // Find the max serial for today
   const prefix = `DB-${today}-`
-  const last = queryOne(
-    "SELECT documentNo FROM orders WHERE documentNo LIKE ? ORDER BY id DESC LIMIT 1",
-    [`${prefix}%`]
-  )
+  const rows = queryAll('SELECT documentNo FROM orders WHERE documentNo LIKE ?', [`${prefix}%`])
+  const last = { documentNo: `${prefix}${Math.max(0, ...rows.map(row => Number(String(row.documentNo).slice(prefix.length)) || 0))}` }
 
   let nextSeq = 1
   if (last && last.documentNo) {
@@ -52,12 +51,21 @@ export interface OrderItemData {
   productCode?: string
   productName?: string
   specification?: string
+  packageSpec?: string
   unit?: string
   quantity?: number
   price?: number
   amount?: number
   remark?: string
   sortOrder?: number
+}
+
+function validatedItemNumbers(data: Partial<OrderItemData>) {
+  const quantity = data.quantity ?? 0, price = data.price ?? 0
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price < 0) throw new Error('明细数量须大于零，单价须为非负数')
+  const amount = Math.round((quantity * price + Number.EPSILON) * 100) / 100
+  if (!Number.isFinite(amount) || amount > Number.MAX_SAFE_INTEGER / 100) throw new Error('明细金额超出范围')
+  return { quantity, price, amount }
 }
 
 // ── Orders ──
@@ -93,11 +101,7 @@ export function getOrderById(id: number) {
   if (!order) return null
 
   const items = queryAll(
-    `SELECT oi.*, p.packageSpec
-     FROM order_items oi
-     LEFT JOIN products p ON oi.productCode = p.productCode
-     WHERE oi.orderId = ?
-     ORDER BY oi.sortOrder ASC`,
+    `SELECT * FROM order_items WHERE orderId = ? ORDER BY sortOrder ASC`,
     [id]
   )
   return { ...order, items }
@@ -105,11 +109,12 @@ export function getOrderById(id: number) {
 
 export function createOrder(data: OrderData) {
   const d = normalizeOrderData(data)
+  if (!d.documentNo || queryOne('SELECT id FROM orders WHERE documentNo=?', [d.documentNo])) d.documentNo = generateDocumentNo(d.date || undefined)
   const result = run(
     `INSERT INTO orders (documentNo, orderNo, date, sender, senderPhone,
       receiver, receiverContact, receiverPhone, receiverAddress, carrierVehicle,
-      carrierName, warehouse, outTime, tonnage, mileage, maker, reviewer, remark)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      carrierName, warehouse, outTime, tonnage, mileage, maker, reviewer, remark, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
     [d.documentNo, d.orderNo, d.date, d.sender, d.senderPhone,
      d.receiver, d.receiverContact, d.receiverPhone, d.receiverAddress, d.carrierVehicle,
      d.carrierName, d.warehouse, d.outTime, d.tonnage, d.mileage, d.maker, d.reviewer, d.remark]
@@ -118,6 +123,7 @@ export function createOrder(data: OrderData) {
 }
 
 export function updateOrder(id: number, data: OrderData) {
+  assertDraftOrder(id)
   const d = normalizeOrderData(data)
   run(
     `UPDATE orders SET documentNo=?, orderNo=?, date=?, sender=?, senderPhone=?,
@@ -134,6 +140,7 @@ export function updateOrder(id: number, data: OrderData) {
 }
 
 export function deleteOrder(id: number) {
+  assertDraftOrder(id)
   withTransaction(() => {
     run('DELETE FROM order_items WHERE orderId = ?', [id])
     run('DELETE FROM orders WHERE id = ?', [id])
@@ -194,9 +201,11 @@ export function getOrderItems(orderId: number) {
 }
 
 export function createOrderItem(data: OrderItemData) {
+  assertDraftOrder(data.orderId)
+  data = { ...data, ...validatedItemNumbers(data) }
   const result = run(
-    `INSERT INTO order_items (orderId, productCode, productName, specification, unit, quantity, price, amount, remark, sortOrder)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO order_items (orderId, productCode, productName, specification, unit, quantity, price, amount, remark, sortOrder, packageSpec)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.orderId,
       data.productCode || '',
@@ -208,15 +217,20 @@ export function createOrderItem(data: OrderItemData) {
       data.amount || 0,
       data.remark || '',
       data.sortOrder || 0,
+      data.packageSpec ?? queryOne('SELECT packageSpec FROM products WHERE productCode=?', [data.productCode || ''])?.packageSpec ?? '',
     ]
   )
   return { id: result.lastInsertRowid }
 }
 
 export function updateOrderItem(id: number, data: Partial<OrderItemData>) {
+  const item = queryOne('SELECT * FROM order_items WHERE id=?', [id])
+  if (!item) throw new Error('明细不存在')
+  assertDraftOrder(item.orderId)
+  data = { ...item, ...data, ...validatedItemNumbers({ ...item, ...data }) }
   run(
     `UPDATE order_items SET productCode=?, productName=?, specification=?, unit=?,
-      quantity=?, price=?, amount=?, remark=?, sortOrder=?
+      quantity=?, price=?, amount=?, remark=?, sortOrder=?, packageSpec=?
      WHERE id=?`,
     [
       data.productCode || '',
@@ -228,6 +242,7 @@ export function updateOrderItem(id: number, data: Partial<OrderItemData>) {
       data.amount || 0,
       data.remark || '',
       data.sortOrder || 0,
+      data.packageSpec ?? queryOne('SELECT packageSpec FROM order_items WHERE id=?', [id])?.packageSpec ?? '',
       id,
     ]
   )
@@ -366,22 +381,26 @@ export function getCustomerByCode(code: string) {
 export { previewExcelImport, importExcelFromFile, applyExcelImport } from './excel-import'
 
 export function deleteOrderItem(id: number) {
+  const item = queryOne('SELECT orderId FROM order_items WHERE id=?', [id])
+  if (!item) throw new Error('明细不存在')
+  assertDraftOrder(item.orderId)
   run('DELETE FROM order_items WHERE id = ?', [id])
   return { success: true }
 }
 
 // ── Order Summary (时间段订单汇总) ──
 
-export function getOrderSummary(dateFrom: string, dateTo: string) {
+export function getOrderSummary(dateFrom: string, dateTo: string, status = '') {
   // 详情表：订单号、客户编码、客户名称、商品编码、商品名称、数量、单价、金额
+  if (status && !['draft','confirmed','shipped','legacy'].includes(status)) throw new Error('汇总状态无效')
   const details = queryAll(
-    `SELECT o.documentNo, o.orderNo, o.receiver,
+    `SELECT o.documentNo, o.orderNo, o.receiver, o.status,
             oi.productCode, oi.productName, oi.quantity, oi.price, oi.amount
      FROM order_items oi
      JOIN orders o ON oi.orderId = o.id
-     WHERE o.date >= ? AND o.date <= ?
+     WHERE o.date >= ? AND o.date <= ? AND o.status <> 'voided' AND (? = '' OR o.status = ?)
      ORDER BY o.date ASC, o.id ASC, oi.sortOrder ASC`,
-    [dateFrom, dateTo]
+    [dateFrom, dateTo, status, status]
   )
 
   // 匹配客户编码
@@ -392,13 +411,14 @@ export function getOrderSummary(dateFrom: string, dateTo: string) {
   }
 
   const detailRows = details.map((row: any) => ({
+    status: row.status,
     documentNo: row.documentNo || '',
     orderNo: row.orderNo || row.documentNo || '',
     customerCode: customerMap[row.receiver] || '',
     customerName: row.receiver || '',
     productCode: row.productCode || '',
     productName: row.productName || '',
-    quantity: Math.round(row.quantity || 0),
+    quantity: row.quantity || 0,
     price: row.price || 0,
     amount: row.amount || 0,
   }))
@@ -407,7 +427,7 @@ export function getOrderSummary(dateFrom: string, dateTo: string) {
   const combined = new Map<string, { customerCode: string; customerName: string; productCode: string; productName: string; totalQty: number; totalAmt: number }>()
 
   for (const row of detailRows) {
-    const key = `${row.customerCode}|${row.productCode}`
+    const key = JSON.stringify([row.customerCode, row.customerName, row.productCode, row.productName])
     const existing = combined.get(key)
     if (existing) {
       existing.totalQty += row.quantity
@@ -703,465 +723,7 @@ export function getPriceChangeLogsByCustomer(customerCode: string) {
 // 车间管理 Workshop
 // ═══════════════════════════════════════════════════════════════
 
-export function getWorkshops() {
-  return queryAll('SELECT * FROM workshops ORDER BY createdAt DESC')
-}
-
-export function createWorkshop(data: { name: string; manager?: string; phone?: string; remark?: string }) {
-  const result = run(
-    'INSERT INTO workshops (name, manager, phone, remark) VALUES (?, ?, ?, ?)',
-    [data.name, data.manager || '', data.phone || '', data.remark || '']
-  )
-  return { id: result.lastInsertRowid }
-}
-
-export function updateWorkshop(id: number, data: { name?: string; manager?: string; phone?: string; remark?: string }) {
-  const current = queryOne('SELECT * FROM workshops WHERE id = ?', [id])
-  if (!current) return { success: false, message: '车间不存在' }
-  run(
-    `UPDATE workshops SET name=?, manager=?, phone=?, remark=? WHERE id=?`,
-    [data.name ?? current.name, data.manager ?? current.manager, data.phone ?? current.phone, data.remark ?? current.remark, id]
-  )
-  return { success: true }
-}
-
-export function deleteWorkshop(id: number) {
-  run('DELETE FROM workshops WHERE id = ?', [id])
-  return { success: true }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 原材料管理 Raw Materials
-// ═══════════════════════════════════════════════════════════════
-
-export function getRawMaterials() {
-  const materials = queryAll('SELECT * FROM raw_materials ORDER BY createdAt DESC')
-  // Attach current stock balance
-  return materials.map((m: any) => {
-    const balance = getMaterialStockBalance(m.id)
-    return { ...m, stockQuantity: balance }
-  })
-}
-
-export function searchRawMaterials(keyword?: string) {
-  let sql = 'SELECT * FROM raw_materials'
-  const params: any[] = []
-  if (keyword && keyword.trim()) {
-    const s = `%${keyword}%`
-    sql += ' WHERE materialCode LIKE ? OR materialName LIKE ? OR specification LIKE ?'
-    params.push(s, s, s)
-  }
-  sql += ' ORDER BY createdAt DESC'
-  const materials = queryAll(sql, params)
-  return materials.map((m: any) => {
-    const balance = getMaterialStockBalance(m.id)
-    return { ...m, stockQuantity: balance }
-  })
-}
-
-function getMaterialStockBalance(materialId: number): number {
-  const inbound = queryOne(
-    'SELECT COALESCE(SUM(quantity), 0) as total FROM material_inbound WHERE materialId = ?',
-    [materialId]
-  )
-  const outbound = queryOne(
-    'SELECT COALESCE(SUM(quantity), 0) as total FROM material_outbound WHERE materialId = ?',
-    [materialId]
-  )
-  return (inbound?.total || 0) - (outbound?.total || 0)
-}
-
-export function createRawMaterial(data: { materialCode: string; materialName: string; specification?: string; unit?: string; price?: number }) {
-  const result = run(
-    'INSERT INTO raw_materials (materialCode, materialName, specification, unit, price) VALUES (?, ?, ?, ?, ?)',
-    [data.materialCode, data.materialName, data.specification || '', data.unit || '', data.price || 0]
-  )
-  return { id: result.lastInsertRowid }
-}
-
-export function updateRawMaterial(id: number, data: { materialCode?: string; materialName?: string; specification?: string; unit?: string; price?: number }) {
-  const current = queryOne('SELECT * FROM raw_materials WHERE id = ?', [id])
-  if (!current) return { success: false, message: '原材料不存在' }
-  run(
-    `UPDATE raw_materials SET materialCode=?, materialName=?, specification=?, unit=?, price=? WHERE id=?`,
-    [
-      data.materialCode ?? current.materialCode,
-      data.materialName ?? current.materialName,
-      data.specification ?? current.specification,
-      data.unit ?? current.unit,
-      data.price ?? current.price,
-      id,
-    ]
-  )
-  return { success: true }
-}
-
-export function deleteRawMaterial(id: number) {
-  run('DELETE FROM raw_materials WHERE id = ?', [id])
-  return { success: true }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 原材料入库 Material Inbound
-// ═══════════════════════════════════════════════════════════════
-
-export function generateInboundNo(date?: string): string {
-  const today = date
-    ? date.replace(/-/g, '')
-    : new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const prefix = `RK-${today}-`
-  const last = queryOne(
-    "SELECT inboundNo FROM material_inbound WHERE inboundNo LIKE ? ORDER BY id DESC LIMIT 1",
-    [`${prefix}%`]
-  )
-  let nextSeq = 1
-  if (last && last.inboundNo) {
-    const parts = last.inboundNo.split('-')
-    const lastSeq = parseInt(parts[parts.length - 1], 10)
-    if (!isNaN(lastSeq)) nextSeq = lastSeq + 1
-  }
-  return `${prefix}${String(nextSeq).padStart(3, '0')}`
-}
-
-export function generateOutboundNo(date?: string): string {
-  const today = date
-    ? date.replace(/-/g, '')
-    : new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const prefix = `CK-${today}-`
-  const last = queryOne(
-    "SELECT outboundNo FROM material_outbound WHERE outboundNo LIKE ? ORDER BY id DESC LIMIT 1",
-    [`${prefix}%`]
-  )
-  let nextSeq = 1
-  if (last && last.outboundNo) {
-    const parts = last.outboundNo.split('-')
-    const lastSeq = parseInt(parts[parts.length - 1], 10)
-    if (!isNaN(lastSeq)) nextSeq = lastSeq + 1
-  }
-  return `${prefix}${String(nextSeq).padStart(3, '0')}`
-}
-
-export function generateProductInboundNo(date?: string): string {
-  const today = date
-    ? date.replace(/-/g, '')
-    : new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const prefix = `PRK-${today}-`
-  const last = queryOne(
-    "SELECT inboundNo FROM product_inbound WHERE inboundNo LIKE ? ORDER BY id DESC LIMIT 1",
-    [`${prefix}%`]
-  )
-  let nextSeq = 1
-  if (last && last.inboundNo) {
-    const parts = last.inboundNo.split('-')
-    const lastSeq = parseInt(parts[parts.length - 1], 10)
-    if (!isNaN(lastSeq)) nextSeq = lastSeq + 1
-  }
-  return `${prefix}${String(nextSeq).padStart(3, '0')}`
-}
-
-export function createMaterialInbound(data: { inboundNo: string; materialId: number; quantity: number; operator?: string; remark?: string; inboundDate?: string }) {
-  const result = run(
-    'INSERT INTO material_inbound (inboundNo, materialId, quantity, operator, remark, inboundDate) VALUES (?, ?, ?, ?, ?, ?)',
-    [data.inboundNo, data.materialId, data.quantity, data.operator || '', data.remark || '', data.inboundDate || '']
-  )
-  const inboundId = result.lastInsertRowid
-
-  // Update inventory log
-  const balance = getMaterialStockBalance(data.materialId)
-  run(
-    'INSERT INTO inventory_log (itemType, itemId, type, quantity, balance, refId, refType, operator, remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ['raw_material', data.materialId, 'inbound', data.quantity, balance, inboundId, 'material_inbound', data.operator || '', data.remark || '']
-  )
-
-  return { id: inboundId }
-}
-
-export function getMaterialInbounds(filters?: { materialId?: number; dateFrom?: string; dateTo?: string }) {
-  let sql = `SELECT mi.*, rm.materialCode, rm.materialName, rm.specification, rm.unit
-             FROM material_inbound mi
-             LEFT JOIN raw_materials rm ON mi.materialId = rm.id
-             WHERE 1=1`
-  const params: any[] = []
-
-  if (filters?.materialId) {
-    sql += ' AND mi.materialId = ?'
-    params.push(filters.materialId)
-  }
-  if (filters?.dateFrom) {
-    sql += ' AND mi.inboundDate >= ?'
-    params.push(filters.dateFrom)
-  }
-  if (filters?.dateTo) {
-    sql += ' AND mi.inboundDate <= ?'
-    params.push(filters.dateTo)
-  }
-
-  sql += ' ORDER BY mi.createdAt DESC'
-  return queryAll(sql, params)
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 原材料出库 Material Outbound
-// ═══════════════════════════════════════════════════════════════
-
-export function createMaterialOutbound(data: { outboundNo: string; workshopId: number; materialId: number; quantity: number; operator?: string; remark?: string; outboundDate?: string }) {
-  // Check stock
-  const balance = getMaterialStockBalance(data.materialId)
-  if (balance < data.quantity) {
-    return { success: false, message: `库存不足！当前库存: ${balance}，出库数量: ${data.quantity}` }
-  }
-
-  const result = run(
-    'INSERT INTO material_outbound (outboundNo, workshopId, materialId, quantity, operator, remark, outboundDate) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [data.outboundNo, data.workshopId, data.materialId, data.quantity, data.operator || '', data.remark || '', data.outboundDate || '']
-  )
-  const outboundId = result.lastInsertRowid
-
-  // Update inventory log
-  const newBalance = getMaterialStockBalance(data.materialId)
-  run(
-    'INSERT INTO inventory_log (itemType, itemId, type, quantity, balance, refId, refType, operator, remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ['raw_material', data.materialId, 'outbound', data.quantity, newBalance, outboundId, 'material_outbound', data.operator || '', data.remark || '']
-  )
-
-  return { success: true, id: outboundId }
-}
-
-export function getMaterialOutbounds(filters?: { workshopId?: number; materialId?: number; dateFrom?: string; dateTo?: string }) {
-  let sql = `SELECT mo.*, rm.materialCode, rm.materialName, rm.specification, rm.unit, w.name as workshopName
-             FROM material_outbound mo
-             LEFT JOIN raw_materials rm ON mo.materialId = rm.id
-             LEFT JOIN workshops w ON mo.workshopId = w.id
-             WHERE 1=1`
-  const params: any[] = []
-
-  if (filters?.workshopId) {
-    sql += ' AND mo.workshopId = ?'
-    params.push(filters.workshopId)
-  }
-  if (filters?.materialId) {
-    sql += ' AND mo.materialId = ?'
-    params.push(filters.materialId)
-  }
-  if (filters?.dateFrom) {
-    sql += ' AND mo.outboundDate >= ?'
-    params.push(filters.dateFrom)
-  }
-  if (filters?.dateTo) {
-    sql += ' AND mo.outboundDate <= ?'
-    params.push(filters.dateTo)
-  }
-
-  sql += ' ORDER BY mo.createdAt DESC'
-  return queryAll(sql, params)
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 成品入库 Product Inbound
-// ═══════════════════════════════════════════════════════════════
-
-export function getProductStockBalance(productId: number): number {
-  const inbound = queryOne(
-    'SELECT COALESCE(SUM(quantity), 0) as total FROM product_inbound WHERE productId = ?',
-    [productId]
-  )
-  // Outbound from orders
-  const outbound = queryOne(
-    `SELECT COALESCE(SUM(oi.quantity), 0) as total
-     FROM order_items oi
-     JOIN products p ON oi.productCode = p.productCode
-     WHERE p.id = ?`,
-    [productId]
-  )
-  return (inbound?.total || 0) - (outbound?.total || 0)
-}
-
-export function createProductInbound(data: { inboundNo: string; productId: number; quantity: number; inboundType: string; operator?: string; remark?: string; inboundDate?: string }) {
-  const result = run(
-    'INSERT INTO product_inbound (inboundNo, productId, quantity, inboundType, operator, remark, inboundDate) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [data.inboundNo, data.productId, data.quantity, data.inboundType, data.operator || '', data.remark || '', data.inboundDate || '']
-  )
-  const inboundId = result.lastInsertRowid
-
-  // Update product stock quantity
-  const balance = getProductStockBalance(data.productId)
-  run('UPDATE products SET stockQuantity = ? WHERE id = ?', [balance, data.productId])
-
-  // Inventory log
-  run(
-    'INSERT INTO inventory_log (itemType, itemId, type, quantity, balance, refId, refType, operator, remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ['product', data.productId, 'inbound', data.quantity, balance, inboundId, 'product_inbound', data.operator || '', data.remark || '']
-  )
-
-  return { id: inboundId }
-}
-
-export function getProductInbounds(filters?: { productId?: number; dateFrom?: string; dateTo?: string }) {
-  let sql = `SELECT pi.*, p.productCode, p.productName, p.specification, p.unit
-             FROM product_inbound pi
-             LEFT JOIN products p ON pi.productId = p.id
-             WHERE 1=1`
-  const params: any[] = []
-
-  if (filters?.productId) {
-    sql += ' AND pi.productId = ?'
-    params.push(filters.productId)
-  }
-  if (filters?.dateFrom) {
-    sql += ' AND pi.inboundDate >= ?'
-    params.push(filters.dateFrom)
-  }
-  if (filters?.dateTo) {
-    sql += ' AND pi.inboundDate <= ?'
-    params.push(filters.dateTo)
-  }
-
-  sql += ' ORDER BY pi.createdAt DESC'
-  return queryAll(sql, params)
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 库存日志 Inventory Log
-// ═══════════════════════════════════════════════════════════════
-
-export function getInventoryLogs(filters?: { itemType?: string; itemId?: number; dateFrom?: string; dateTo?: string; type?: string }) {
-  let sql = 'SELECT * FROM inventory_log WHERE 1=1'
-  const params: any[] = []
-
-  if (filters?.itemType) {
-    sql += ' AND itemType = ?'
-    params.push(filters.itemType)
-  }
-  if (filters?.itemId) {
-    sql += ' AND itemId = ?'
-    params.push(filters.itemId)
-  }
-  if (filters?.type) {
-    sql += ' AND type = ?'
-    params.push(filters.type)
-  }
-  if (filters?.dateFrom) {
-    sql += ' AND createdAt >= ?'
-    params.push(filters.dateFrom)
-  }
-  if (filters?.dateTo) {
-    sql += ' AND createdAt <= ?'
-    params.push(filters.dateTo)
-  }
-
-  sql += ' ORDER BY createdAt DESC LIMIT 500'
-  return queryAll(sql, params)
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 收发存报表 Warehouse Report
-// ═══════════════════════════════════════════════════════════════
-
-// 原材料收发存报表
-export function getRawMaterialReport(dateFrom: string, dateTo: string) {
-  const materials = queryAll('SELECT * FROM raw_materials ORDER BY materialCode ASC')
-
-  return materials.map((m: any) => {
-    // 上期结存: 开始日期之前库存
-    const beforeInbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM material_inbound WHERE materialId = ? AND inboundDate < ?',
-      [m.id, dateFrom]
-    )
-    const beforeOutbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM material_outbound WHERE materialId = ? AND outboundDate < ?',
-      [m.id, dateFrom]
-    )
-    const openingBalance = (beforeInbound?.total || 0) - (beforeOutbound?.total || 0)
-
-    // 本期入库
-    const periodInbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM material_inbound WHERE materialId = ? AND inboundDate >= ? AND inboundDate <= ?',
-      [m.id, dateFrom, dateTo]
-    )
-
-    // 本期出库
-    const periodOutbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM material_outbound WHERE materialId = ? AND outboundDate >= ? AND outboundDate <= ?',
-      [m.id, dateFrom, dateTo]
-    )
-
-    const inbound = periodInbound?.total || 0
-    const outbound = periodOutbound?.total || 0
-    const closingBalance = openingBalance + inbound - outbound
-    const amount = closingBalance * (m.price || 0)
-
-    return {
-      company: '',
-      productCode: m.materialCode,
-      productName: m.materialName,
-      unit: m.unit,
-      openingBalance,
-      periodInbound: inbound,
-      periodOutbound: outbound,
-      closingBalance,
-      price: m.price || 0,
-      amount,
-    }
-  })
-}
-
-// 成品收发存报表
-export function getProductReport(dateFrom: string, dateTo: string) {
-  const products = queryAll('SELECT * FROM products ORDER BY productCode ASC')
-
-  return products.map((p: any) => {
-    // 上期结存: 开始日期之前入库 - 开始日期之前订单出库
-    const beforeInbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM product_inbound WHERE productId = ? AND inboundDate < ?',
-      [p.id, dateFrom]
-    )
-    const beforeOutbound = queryOne(
-      `SELECT COALESCE(SUM(oi.quantity), 0) as total
-       FROM order_items oi
-       JOIN orders o ON oi.orderId = o.id
-       WHERE oi.productCode = ? AND o.date < ?`,
-      [p.productCode, dateFrom]
-    )
-    const openingBalance = (beforeInbound?.total || 0) - (beforeOutbound?.total || 0)
-
-    // 本期入库
-    const periodInbound = queryOne(
-      'SELECT COALESCE(SUM(quantity), 0) as total FROM product_inbound WHERE productId = ? AND inboundDate >= ? AND inboundDate <= ?',
-      [p.id, dateFrom, dateTo]
-    )
-
-    // 本期出库 (通过订单)
-    const periodOutbound = queryOne(
-      `SELECT COALESCE(SUM(oi.quantity), 0) as total
-       FROM order_items oi
-       JOIN orders o ON oi.orderId = o.id
-       WHERE oi.productCode = ? AND o.date >= ? AND o.date <= ?`,
-      [p.productCode, dateFrom, dateTo]
-    )
-
-    const inbound = periodInbound?.total || 0
-    const outbound = periodOutbound?.total || 0
-    const closingBalance = openingBalance + inbound - outbound
-    const amount = closingBalance * (p.price || 0)
-
-    return {
-      company: p.brand || '',
-      productCode: p.productCode,
-      productName: p.productName,
-      unit: p.unit,
-      openingBalance,
-      periodInbound: inbound,
-      periodOutbound: outbound,
-      closingBalance,
-      price: p.price || 0,
-      amount,
-    }
-  })
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 打印设置 Print Settings
-// ═══════════════════════════════════════════════════════════════
+// Legacy SQL inventory tables are archived; see inventory-service.ts for active inventory.
 
 export function getPrintSettings() {
   const rows = queryAll('SELECT key, value FROM settings')

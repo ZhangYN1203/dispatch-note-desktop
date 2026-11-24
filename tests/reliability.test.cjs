@@ -200,7 +200,7 @@ test('数据库重开后订单与库存仍存在，外键仍有效', async () =>
   const { id } = h.saveOrderWithItems({}, [item]);
   db.closeDatabase(); await db.initDatabase(filename);
   assert.equal(h.getOrderById(id).items[0].amount, 3.75);
-  assert.throws(() => h.createOrderItem({ orderId: 999999, ...item }), /FOREIGN KEY/);
+  assert.throws(() => db.getDb().run('INSERT INTO order_items (orderId) VALUES (999999)'), /FOREIGN KEY/);
   assert.equal(require('../electron/inventory.ts').listInventory('materials')[0].quantity, 19);
 });
 
@@ -255,4 +255,156 @@ test('保存打印规格中途失败时当前设置与历史配置一起回滚',
   assert.throws(() => savePrinterProfile({ ...before.active, heightMm: 300 }), /配置写入失败/);
   assert.deepEqual(getPrintConfiguration(), before);
   db.getDb().run('DROP TRIGGER reject_profile');
+});
+
+test('开单默认值只接受可复用字段，保存失败不覆盖旧值', () => {
+  const defaults = require('../electron/order-defaults.ts');
+  defaults.saveOrderDefaults({ sender: '演示默认单位', warehouse: '默认仓库', maker: '制单员' });
+  assert.equal(defaults.getOrderDefaults().warehouse, '默认仓库');
+  assert.throws(() => defaults.saveOrderDefaults({ receiver: '不可设为默认的客户' }));
+  assert.equal(defaults.getOrderDefaults().sender, '演示默认单位');
+});
+
+test('同一打印机可收藏多套方案，删除收藏不改变当前规格', () => {
+  const config = require('../electron/printer-config.ts');
+  const { normalizePrintProfile } = require('../electron/print-profile.ts');
+  const before = config.getPrintConfiguration().active;
+  const a = config.savePrintFavorite('联单', normalizePrintProfile({ printerName: '收藏打印机' }));
+  config.savePrintFavorite('A4', normalizePrintProfile({ printerName: '收藏打印机', preset: 'a4', widthMm: 210, heightMm: 297 }));
+  assert.equal(config.getPrintConfiguration().favorites.length, 2);
+  config.deletePrintFavorite(a.id);
+  assert.equal(config.getPrintConfiguration().favorites.length, 1);
+  assert.deepEqual(config.getPrintConfiguration().active, before);
+});
+
+test('箱规写入明细快照，商品修改不会改变旧单打印内容', () => {
+  const product = h.createProduct({ productCode: 'SNAP', productName: '原商品', specification: '100g', packageSpec: '1x12', unit: '件', price: 10 });
+  const order = h.saveOrderWithItems({}, [{ productCode: 'SNAP', productName: '原商品', specification: '100g', quantity: 2, price: 10 }]);
+  h.updateProduct(product.id, { packageSpec: '1x24', specification: '200g', price: 20 });
+  const saved = h.getOrderById(order.id).items[0];
+  assert.equal(saved.packageSpec, '1x12'); assert.equal(saved.specification, '100g'); assert.equal(saved.price, 10);
+});
+
+test('库存业务把数量与流水一起提交，中断回滚，同请求不重复入库', () => {
+  const service = require('../electron/inventory-service.ts');
+  const inventory = require('../electron/inventory.ts');
+  const id = inventory.putInventory('materials', { name: '事务测试原料', quantity: 5, unit: 'kg' });
+  service.executeInventoryOperation('material.inbound', { materialId: id, quantity: 2 }, 'inbound-once');
+  service.executeInventoryOperation('material.inbound', { materialId: id, quantity: 2 }, 'inbound-once');
+  assert.equal(service.getEntity('materials', id).quantity, 7);
+  db.getDb().run("CREATE TRIGGER reject_stock_log BEFORE INSERT ON production_records WHEN NEW.store='stock_logs' BEGIN SELECT RAISE(ABORT,'流水失败'); END");
+  assert.throws(() => service.executeInventoryOperation('material.inbound', { materialId: id, quantity: 3 }, 'inbound-rollback'), /流水失败/);
+  assert.equal(service.getEntity('materials', id).quantity, 7);
+  db.getDb().run('DROP TRIGGER reject_stock_log');
+  service.executeInventoryOperation('material.inbound', { materialId: id, quantity: 3 }, 'inbound-rollback');
+  assert.equal(service.getEntity('materials', id).quantity, 10);
+});
+
+test('领料校验最新库存与生产状态，不能负数出库或覆盖余额', () => {
+  const service = require('../electron/inventory-service.ts');
+  const inventory = require('../electron/inventory.ts');
+  const materialId = inventory.putInventory('materials', { name: '原料', quantity: 3 });
+  const workshopId = inventory.putInventory('workshops', { name: '车间' });
+  const productionId = inventory.putInventory('productions', { status: 'production', order_id: 0 });
+  assert.throws(() => service.executeInventoryOperation('material.outbound', { materialId, workshopId, quantity: -1 }, 'negative'));
+  assert.throws(() => service.executeInventoryOperation('material.outbound', { materialId, workshopId, quantity: 4 }, 'overstock'), /库存不足/);
+  service.executeInventoryOperation('material.outbound', { materialId, workshopId, productionId, quantity: 2 }, 'use-once');
+  assert.equal(service.getEntity('materials', materialId).quantity, 1);
+  assert.throws(() => service.saveInventoryEntity('materials', { ...service.getEntity('materials', materialId), quantity: 99 }), /库存/);
+});
+
+test('订单确认不扣库存，发货整单扣减一次；确认退回后作废恢复一次', () => {
+  const workflow = require('../electron/order-workflow.ts');
+  const inventory = require('../electron/inventory.ts');
+  const service = require('../electron/inventory-service.ts');
+  const stockId = inventory.putInventory('finished_products', { product_name: '测试成品', product_code: 'SHIP', quantity: 10, unit: '件' });
+  const order = h.saveOrderWithItems({ receiver: '测试客户' }, [{ ...item, productCode: 'SHIP', unit: '件', quantity: 3 }]);
+  workflow.transitionOrder(order.id, 'confirmed');
+  assert.equal(service.getEntity('finished_products', stockId).quantity, 10);
+  assert.throws(() => h.saveOrderWithItems({}, [item], order.id), /草稿/);
+  const allocations = [{ itemId: h.getOrderById(order.id).items[0].id, stockId }];
+  workflow.transitionOrder(order.id, 'shipped', { allocations });
+  assert.equal(service.getEntity('finished_products', stockId).quantity, 7);
+  assert.throws(() => workflow.transitionOrder(order.id, 'shipped', { allocations }));
+  assert.throws(() => workflow.transitionOrder(order.id, 'voided', { reason: '退货' }), /退回/);
+  workflow.transitionOrder(order.id, 'voided', { reason: '货物退回', returnStock: true });
+  assert.equal(service.getEntity('finished_products', stockId).quantity, 10);
+  assert.throws(() => workflow.transitionOrder(order.id, 'voided', { reason: '重复', returnStock: true }));
+  assert.equal(workflow.getOrderEvents(order.id).length, 3);
+});
+
+test('整单多商品发货中途失败，状态、所有库存与发货明细全部回滚', () => {
+  const workflow = require('../electron/order-workflow.ts');
+  const inventory = require('../electron/inventory.ts');
+  const service = require('../electron/inventory-service.ts');
+  const a = inventory.putInventory('finished_products', { product_name: '成品A', quantity: 10, unit: '件' });
+  const b = inventory.putInventory('finished_products', { product_name: '成品B', quantity: 1, unit: '件' });
+  const order = h.saveOrderWithItems({ receiver: '测试客户' }, [{ ...item, unit: '件', quantity: 2 }, { ...item, unit: '件', quantity: 2 }]);
+  workflow.transitionOrder(order.id, 'confirmed');
+  const lines = h.getOrderById(order.id).items;
+  assert.throws(() => workflow.transitionOrder(order.id, 'shipped', { allocations: [{ itemId: lines[0].id, stockId: a }, { itemId: lines[1].id, stockId: b }] }), /库存不足/);
+  assert.equal(service.getEntity('finished_products', a).quantity, 10);
+  assert.equal(h.getOrderById(order.id).status, 'confirmed');
+  assert.equal(db.queryAll('SELECT * FROM order_shipments WHERE orderId=?', [order.id]).length, 0);
+});
+
+test('旧明细接口和发货边界都拒绝负数量，生产状态随整批发货与退回同步', () => {
+  const workflow = require('../electron/order-workflow.ts');
+  const inventory = require('../electron/inventory.ts');
+  const order = h.createOrder({ receiver: '测试客户' });
+  assert.throws(() => h.createOrderItem({ orderId: order.id, ...item, quantity: -3 }));
+  const line = h.createOrderItem({ orderId: order.id, ...item, quantity: 3 });
+  assert.throws(() => h.updateOrderItem(line.id, { quantity: -3 }));
+  const productionId = inventory.putInventory('productions', { status: 'warehoused' });
+  const stockId = inventory.putInventory('finished_products', { product_name: '成品', quantity: 3, production_id: productionId });
+  workflow.transitionOrder(order.id, 'confirmed');
+  workflow.transitionOrder(order.id, 'shipped', { allocations: [{ itemId: line.id, stockId }] });
+  assert.equal(inventory.listInventory('productions').find(p => p.id === productionId).status, 'shipped');
+  workflow.transitionOrder(order.id, 'voided', { reason: '退回', returnStock: true });
+  assert.equal(inventory.listInventory('productions').find(p => p.id === productionId).status, 'warehoused');
+});
+
+
+test('状态边界再次拒绝损坏数量，汇总保留小数并排除作废', () => {
+  const workflow = require('../electron/order-workflow.ts');
+  const order = h.saveOrderWithItems({ receiver: '汇总客户', date: '2099-01-02' }, [{ ...item, quantity: 1.25 }]);
+  db.run('UPDATE order_items SET quantity=-1 WHERE orderId=?', [order.id]);
+  assert.throws(() => workflow.transitionOrder(order.id, 'confirmed'), /数量/);
+  db.run('UPDATE order_items SET quantity=1.25 WHERE orderId=?', [order.id]);
+  workflow.transitionOrder(order.id, 'confirmed');
+  const summary = h.getOrderSummary('2099-01-01', '2099-01-03', 'confirmed');
+  assert.equal(summary.details.length, 1);
+  assert.equal(summary.details[0].quantity, 1.25);
+  workflow.transitionOrder(order.id, 'voided', { reason: '取消' });
+  assert.equal(h.getOrderSummary('2099-01-01', '2099-01-03').details.length, 0);
+});
+
+test('旧版数据库升级先保留原文件，历史订单不追溯扣库存且箱规只回填一次', async () => {
+  db.closeDatabase();
+  const initSQL = require('sql.js');
+  const SQL = await initSQL();
+  const legacy = new SQL.Database(fs.readFileSync(filename));
+  legacy.run('DROP INDEX idx_new_order_document');
+  legacy.run('ALTER TABLE orders DROP COLUMN status');
+  legacy.run('ALTER TABLE order_items DROP COLUMN packageSpec');
+  legacy.run("INSERT INTO orders(documentNo,receiver) VALUES('OLD-DUP','历史客户'),('OLD-DUP','历史客户')");
+  legacy.run("INSERT INTO products(productCode,packageSpec) VALUES('OLD-SNAP','1x8')");
+  legacy.run("INSERT INTO order_items(orderId,productCode,quantity,price) VALUES((SELECT MAX(id) FROM orders),'OLD-SNAP',2,1)");
+  const bytes = Buffer.from(legacy.export()); legacy.close();
+  fs.writeFileSync(filename, bytes);
+  await db.initDatabase(filename);
+  const backups = fs.readdirSync(path.join(root, 'backups')).filter(n => n.endsWith('-schema-upgrade.db'));
+  assert.equal(backups.length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(root, 'backups', backups[0])), bytes);
+  const historical = db.queryOne("SELECT id,status FROM orders WHERE documentNo='OLD-DUP' ORDER BY id DESC LIMIT 1");
+  assert.equal(historical.status, 'legacy');
+  assert.throws(() => h.updateOrder(historical.id, { receiver: '修改' }), /草稿/);
+  assert.equal(h.getOrderById(historical.id).items[0].packageSpec, '1x8');
+  db.run("UPDATE products SET packageSpec='1x16' WHERE productCode='OLD-SNAP'");
+  db.closeDatabase(); await db.initDatabase(filename);
+  assert.equal(h.getOrderById(historical.id).items[0].packageSpec, '1x8');
+  assert.equal(fs.readdirSync(path.join(root, 'backups')).filter(n => n.endsWith('-schema-upgrade.db')).length, 1);
+  const created = h.createOrder({ documentNo: 'OLD-DUP' });
+  assert.equal(h.getOrderById(created.id).status, 'draft');
+  assert.notEqual(h.getOrderById(created.id).documentNo, 'OLD-DUP');
 });
