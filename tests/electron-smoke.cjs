@@ -49,7 +49,7 @@ async function run() {
   }
   assert.ok(window, 'window exists');
   seed.destroy();
-  const evaluate = code => window.webContents.executeJavaScript(code);
+  const evaluate = async code => { try { return await window.webContents.executeJavaScript(code); } catch(error) { throw new Error('Renderer command failed: '+code.slice(0,180)+' :: '+error.message); } };
   const until = async (code) => {
     for (let i = 0; i < 100; i++) { if (await evaluate(code)) return; await wait(50); }
     throw new Error('Timed out: ' + code);
@@ -62,6 +62,19 @@ async function run() {
   assert.equal(migrated[0].supplier_id, 3);
   assert.equal(migrated[0].quantity, 42);
   reports.push('真实 IndexedDB 首次迁移保留原编号及供应商关联');
+  await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
+  assert.ok(!(await evaluate('document.body.innerText')).includes('备份全部数据'),'startup does not silently enter orders');
+  await evaluate(`document.querySelector('[data-system-choice="production"]').click()`);
+  await until(`document.querySelector('.workspace')?.dataset.system==='production' && document.body.innerText.includes('原材料管理')`);
+  const chooseSystem=async target=>{
+    await evaluate(`document.querySelector('[data-testid="system-switch"]').click()`);
+    await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
+    await evaluate(`document.querySelector('[data-system-choice="${target}"]').click()`);
+    await until(`document.querySelector('.workspace')?.dataset.system==='${target}' && !document.querySelector('[data-testid="system-chooser"]')`);
+  };
+  await chooseSystem('orders');
+  reports.push('启动先选系统，可先进入生产库存，再通过共同入口切到订单发货');
+
   await until('!!document.querySelector(".page-header")');
   assert.match(await evaluate('document.body.innerText'), /备份全部数据/);
   const id = await evaluate(`(async () => {
@@ -284,6 +297,15 @@ async function run() {
   assert.ok(Math.abs(square-10*96/25.4)<1);
   assert.equal(await pdfFor(defaultProfile,'calibration'),1);
   reports.push('同机多方案收藏与应用通过；校准页10mm方框、单份打印和PDF尺寸通过');
+  await chooseSystem('production');
+  const hiddenPrintKey = await evaluate(`(()=>{const e=new KeyboardEvent('keydown',{key:'p',ctrlKey:true,bubbles:true,cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()`);
+  assert.equal(hiddenPrintKey,false,'hidden order page does not intercept production Ctrl+P');
+  assert.equal(await evaluate(`!!document.querySelector('.print-settings-overlay')`),false);
+  assert.equal(await evaluate(`document.documentElement.style.getPropertyValue('--page-height')`),'','order paper CSS is released while production is active');
+  await chooseSystem('orders'); await ready();
+  assert.equal(await pdfFor(defaultProfile,'calibration-after-system-switch'),1);
+  reports.push('隐藏订单不拦截库存快捷打印，切回后恢复正确纸张和分页');
+
 
   const core = require(path.join(appRoot,'dist-electron/inventory.js'));
   const stockId = core.putInventory('finished_products',{product_name:'UI发货成品',product_code:'FLOW-P',unit:'件',quantity:10});
@@ -319,7 +341,7 @@ async function run() {
   const productionId=await evaluate(`window.electronAPI.putInventory('productions',{order_id:0,order_no:'外部演示任务',status:'pending',manager:'测试'},true)`);
   await evaluate(`window.electronAPI.inventoryOperation('production.start',{productionId:${productionId}},'ui-start')`);
   await evaluate(`window.electronAPI.inventoryOperation('production.complete',{productionId:${productionId}},'ui-complete')`);
-  await evaluate(`window.__newModule.toggleNewSystem()`);
+  await chooseSystem('production');
   await wait(150);
   await evaluate(`window.__newModule.showWarehouseDialog(${productionId});document.getElementById('fp-name').value='UI生产入库';document.getElementById('fp-qty').value='3';`);
   await evaluate(`window.__newModule.confirmWarehouse(${productionId})`);
@@ -327,10 +349,10 @@ async function run() {
   assert.equal(core.listInventory('finished_products').find(p=>p.production_id===productionId).quantity,3);
   reports.push('旧生产界面的成品入库已通过统一事务，成品数量、任务状态及流水同步提交');
 
-  await evaluate(`window.__newModule.toggleNewSystem()`);
+  await chooseSystem('orders');
   // Reproduce a bottom-row menu at a small window size and view an upgraded order.
   const legacyIds = Array.from({length: 10}, (_, i) => handlers.saveOrderWithItems({
-    receiver:'历史演示客户', orderNo:'HISTORY-UI-'+i, sender:'历史演示发货方', remark:'历史备注',
+    receiver:'历史演示客户', receiverContact:'历史联系人', receiverAddress:'演示收货地址', senderPhone:'演示电话', orderNo:'HISTORY-UI-'+i, sender:'历史演示发货方', remark:'历史备注',
   }, [{productName:'历史商品快照',specification:'200g',packageSpec:'1x12',unit:'件',quantity:2,price:9.5}]).id);
   for (const oldId of legacyIds) database.run("UPDATE orders SET status='legacy' WHERE id=?",[oldId]);
   window.setContentSize(1000,640);
@@ -345,9 +367,16 @@ async function run() {
   await evaluate(`location.hash='/orders/${legacyId}'`);
   await until(`!!document.querySelector('[data-testid="order-detail"]')`);
   const historicalText=await evaluate('document.body.innerText');
-  for(const expected of ['历史演示客户','历史演示发货方','历史商品快照','1x12','19.00','历史备注','发货状态未记录']) assert.ok(historicalText.includes(expected),expected);
+  for(const expected of ['历史演示客户','历史演示发货方','历史商品快照','1x12','19.00','历史备注','历史联系人','演示收货地址','演示电话','发货状态未记录']) assert.ok(historicalText.includes(expected),expected);
   assert.equal(await evaluate(`document.querySelectorAll('[data-order-primary-action]').length`),0,'legacy records must not expose stock-changing actions');
   assert.equal(handlers.getOrderById(legacyId).status,'legacy');
+  const compactLayout=await evaluate(`(()=>{const table=document.querySelector('.order-detail-items');return {top:table.getBoundingClientRect().top,nav:!!document.querySelector('.workspace-header'),blank:Array.from(document.querySelectorAll('.detail-parties dd')).filter(d=>d.textContent.trim()==='—').length}})()`);
+  assert.equal(compactLayout.nav,true,'all pages share a clear workspace navigation');
+  assert.ok(compactLayout.top<460,`order items should start in the first screen, got ${compactLayout.top}`);
+  assert.equal(compactLayout.blank,0,'empty optional party fields do not create rows');
+  await evaluate(`document.querySelector('.detail-supplement summary').click()`);
+  assert.ok((await evaluate('document.body.innerText')).includes('承运人'),'optional fields remain available');
+
   const visibleDraft=handlers.saveOrderWithItems({receiver:'明显状态客户',orderNo:'VISIBLE-DRAFT'},[{productName:'状态明细',quantity:1,price:1}]).id;
   await evaluate(`location.hash='/'`); await until(`document.body.innerText.includes('VISIBLE-DRAFT')`);
   assert.equal(await evaluate(`(()=>{const row=Array.from(document.querySelectorAll('tbody tr')).find(r=>r.innerText.includes('VISIBLE-DRAFT'));return Array.from(row.querySelectorAll('[data-order-primary-action]')).some(b=>b.textContent==='确认订单' && b.getBoundingClientRect().width>0)})()`),true);
@@ -360,6 +389,46 @@ async function run() {
   await until(`document.querySelector('[data-testid="order-detail"] [data-order-primary-action]')?.textContent==='确认订单'`);
   assert.equal(handlers.getOrderById(visibleDraft).status,'draft');
   reports.push('小窗口底行更多操作完整可见；历史详情展示快照和状态说明；列表及详情直接确认并可退回草稿');
+
+  await evaluate(`location.hash='/'`); await until(`!!document.querySelector('.order-status-tab')`);
+  await evaluate(`Array.from(document.querySelectorAll('.order-status-tab')).find(b=>b.textContent.startsWith('已发货')).click()`);
+  await until(`document.body.innerText.includes('当前条件下没有订单')`);
+  await evaluate(`Array.from(document.querySelectorAll('.search-bar button')).find(b=>b.textContent==='重置').click()`);
+  await until(`document.body.innerText.includes('VISIBLE-DRAFT') && !!document.querySelector('tbody tr')`);
+  await evaluate(`location.hash='/orders/${visibleDraft}'`);
+  await until(`!!document.querySelector('[aria-label="制单人"]')`);
+  await evaluate(`(()=>{const input=document.querySelector('[aria-label="制单人"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'导航未保存测试');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await wait(30);
+  await evaluate(`window.confirm=()=>false;document.querySelector('.workspace-header a[href="#/customer-manager"]').click()`); await wait(80);
+  assert.match(await evaluate('location.hash'),new RegExp('orders/'+visibleDraft+'$'),'shared navigation keeps unsaved-change protection');
+  await evaluate(`window.confirm=()=>true;document.querySelector('.workspace-header a[href="#/customer-manager"]').click()`);
+  await until(`!!document.querySelector('.customer-card')`);
+  await chooseSystem('production');
+  await until(`document.querySelector('#new-modules-sidebar').style.display==='flex'`);
+  await evaluate(`document.querySelector('#back-to-old').click()`);
+  await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
+  await evaluate(`document.querySelector('[data-system-choice="orders"]').click()`);
+  await until(`document.querySelector('.workspace')?.dataset.system==='orders'`);
+  assert.equal(await evaluate(`!!document.querySelector('#global-nav-toggle')`),false,'only the shared production navigation is shown');
+  reports.push('紧凑状态筛选和空状态可恢复，共享导航保留未保存保护，生产库存入口与返回正常');
+
+  await evaluate(`location.hash='/orders/${visibleDraft}'`); await until(`!!document.querySelector('[aria-label="制单人"]')`);
+  await evaluate(`(()=>{const input=document.querySelector('[aria-label="制单人"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'切换保留测试');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);await wait(30);
+  await evaluate(`window.confirm=()=>false;document.querySelector('[data-testid="system-switch"]').click()`);
+  await until(`!!document.querySelector('[data-system-choice="production"]')`);
+  await evaluate(`document.querySelector('[data-system-choice="production"]').click()`);await wait(60);
+  assert.equal(await evaluate(`document.querySelector('.workspace').dataset.system`),'orders');
+  await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(b=>b.textContent==='取消切换').click()`);
+  await evaluate(`void (window.confirm=()=>true)`);await chooseSystem('production');
+  assert.equal(await evaluate(`!!document.querySelector('#production-system-host #new-modules-sidebar')`),true,'production is hosted by the peer system content area');
+  assert.ok(!(await evaluate('document.body.innerText')).includes('返回订单工作台'));
+  await chooseSystem('orders');
+  assert.equal(await evaluate(`document.querySelector('[aria-label="制单人"]').value`),'切换保留测试');
+  assert.notEqual(handlers.getOrderById(visibleDraft).maker,'切换保留测试','switching does not silently save edits');
+  await evaluate(`document.querySelector('.workspace-header nav a[href="#/"]').click()`);await until(`!!document.querySelector('.order-status-tab')`);
+  await evaluate(`location.reload()`);await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
+  assert.equal(await evaluate(`document.querySelector('.workspace').dataset.system`),'choose','new page startup returns to chooser');
+  reports.push('两个系统平级挂载，取消切换生效，来回切换保留未保存订单，重新打开先选择系统');
   console.log(JSON.stringify({ passed: reports, artifactDirectory: root }, null, 2));
   app.exit(0);
 }

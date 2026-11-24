@@ -27,6 +27,16 @@ async function capture() {
   };
   await until('!!window.inventoryReady && !!window.electronAPI');
   await js('window.inventoryReady');
+  fs.mkdirSync(output, { recursive: true });
+  await until(`!!document.querySelector('[data-testid="system-chooser"]')`); await js('document.fonts.ready'); await wait(200);
+  fs.writeFileSync(path.join(output,'system-entry.png'),(await window.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('[data-system-choice="orders"]').click()`);
+  await until(`document.querySelector('.workspace')?.dataset.system==='orders'`);
+  const chooseSystem=async target=>{
+    await js(`document.querySelector('[data-testid="system-switch"]').click()`);await until(`!!document.querySelector('[data-system-choice="${target}"]')`);
+    await js(`document.querySelector('[data-system-choice="${target}"]').click()`);await until(`document.querySelector('.workspace')?.dataset.system==='${target}' && !document.querySelector('[data-testid="system-chooser"]')`);
+  };
+
   const database = require('../dist-electron/database.js');
   const handlers = require('../dist-electron/handlers.js');
   const products = database.queryAll('SELECT * FROM products ORDER BY productCode');
@@ -35,7 +45,7 @@ async function capture() {
     receiverContact: '联系人 A', warehouse: '演示成品库', maker: '演示制单员', remark: '仅用于项目演示，全部资料为虚构。' },
   products.map((product, index) => ({ ...product, quantity: [12, 8, 10, 4, 2][index], price: product.price }))).id;
   for (let i = 2; i <= 4; i++) handlers.saveOrderWithItems({ documentNo: `DEMO-20261123-00${i}`, orderNo: `DEMO-00${i}`, date: '2026-11-23',
-    sender: '示例发货单位（虚构）', receiver: i % 2 ? '示例客户 A' : '示例客户 B', warehouse: '演示成品库' },
+    sender: '示例发货单位（虚构）', receiverContact:'演示联系人', receiverAddress:'示例市演示路 1 号（虚构）', maker:'演示制单员', receiver: i % 2 ? '示例客户 A' : '示例客户 B', warehouse: '演示成品库' },
   products.slice(0, i - 1).map(product => ({ ...product, quantity: i * 2 })));
   const table = handlers.createPriceTable('演示客户 B 价格表');
   const customer = database.queryOne('SELECT * FROM customers WHERE code=?', ['DEMO-C002']);
@@ -60,6 +70,8 @@ async function capture() {
   };
   // Reload list so it reads the newly created fixtures.
   await js(`window.location.reload()`);
+  await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
+  await js(`document.querySelector('[data-system-choice="orders"]').click()`);
   await until(`document.body.innerText.includes('DEMO-001')`);
   await screenshot('orders', '/', `document.body.innerText.includes('DEMO-001')`);
   await screenshot('editor', `/orders/${id}`, `document.body.innerText.includes('商品明细') && document.querySelectorAll('.btn-danger').length >= 5`);
@@ -74,7 +86,14 @@ async function capture() {
   await until(`Array.from(document.querySelectorAll('span')).some(s=>s.textContent==='演示客户 B 价格表')`);
   await js(`Array.from(document.querySelectorAll('span')).find(s=>s.textContent==='演示客户 B 价格表').parentElement.click()`);
   await screenshot('prices', '/product-manager', `document.body.innerText.includes('示例调味酱')`);
-  window.setContentSize(1440,1500);
+  await screenshot('customers', '/customer-manager', `document.body.innerText.includes('示例客户 A')`);
+  await screenshot('summary', '/order-summary', `document.body.innerText.includes('开始日期')`);
+  await chooseSystem('production'); await until(`document.querySelector('#new-modules-sidebar').style.display==='flex'`); await wait(250);
+  fs.writeFileSync(path.join(output,'production.png'),(await window.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('[data-testid="system-switch"]').click()`); await until(`!!document.querySelector('.system-switch-dialog')`); await wait(150);
+  fs.writeFileSync(path.join(output,'system-switch.png'),(await window.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('[data-system-choice="orders"]').click()`); await until(`document.querySelector('.workspace')?.dataset.system==='orders'`);
+  window.setContentSize(1440,1000);
   await screenshot('order-detail', `/orders/${historicalId}/view`, `!!document.querySelector('[data-testid="order-detail"]')`);
   window.setContentSize(1000,640);
   await js(`location.hash='/'`); await until(`!!document.querySelector('.order-more-trigger')`);

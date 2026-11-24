@@ -159,14 +159,19 @@
   function getById(storeName, id) {
     return getAllFromStore(storeName).then(function(rows) { return rows.find(function(row) { return row.id === id; }); });
   }
+  var pendingInventoryWrites = 0;
+  function inventoryWrite(operation) {
+    pendingInventoryWrites++;
+    return inventoryReady.then(operation).finally(function() { pendingInventoryWrites--; });
+  }
   function addToStore(storeName, data) {
-    return inventoryReady.then(function() { return window.electronAPI.putInventory(storeName, data, true); });
+    return inventoryWrite(function() { return window.electronAPI.putInventory(storeName, data, true); });
   }
   function updateInStore(storeName, data) {
-    return inventoryReady.then(function() { return window.electronAPI.putInventory(storeName, data); });
+    return inventoryWrite(function() { return window.electronAPI.putInventory(storeName, data); });
   }
   function deleteFromStore(storeName, id) {
-    return inventoryReady.then(function() { return window.electronAPI.deleteInventory(storeName, id); });
+    return inventoryWrite(function() { return window.electronAPI.deleteInventory(storeName, id); });
   }
   function getByIndex(storeName, indexName, value) {
     return getAllFromStore(storeName).then(function(rows) { return rows.filter(function(row) { return row[indexName] === value; }); });
@@ -250,7 +255,6 @@
   function init() {
     // 等待页面加载完成后初始化
     function onReady() {
-      addGlobalNavButton();
       setupApp();
     }
     if (document.readyState === 'loading') {
@@ -305,20 +309,20 @@
   }
 
   function buildSidebarHTML() {
-    return '<div class="sidebar-header"><h2>📋 生产管理</h2></div>' +
+    return '<div class="sidebar-header"><h2>业务导航<small class="sidebar-subtitle">原料 · 生产 · 成品</small></h2></div>' +
       '<div class="sidebar-menu">' +
       '<div class="menu-section">库存管理</div>' +
-      '<button class="menu-item active" data-page="materials"><span class="menu-icon">📦</span> 原材料管理</button>' +
-      '<button class="menu-item" data-page="suppliers"><span class="menu-icon">🏭</span> 供应商管理</button>' +
+      '<button class="menu-item active" data-page="materials"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4z M3 7v10l9 4 9-4V7 M12 11v10" /></svg></span> 原材料管理</button>' +
+      '<button class="menu-item" data-page="suppliers"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V8l6 3V6l6 3V3h6v18z M7 16h1 M12 16h1 M17 16h1" /></svg></span> 供应商管理</button>' +
       '<div class="menu-section">生产管理</div>' +
-      '<button class="menu-item" data-page="workshops"><span class="menu-icon">🏗️</span> 车间管理</button>' +
-      '<button class="menu-item" data-page="productions"><span class="menu-icon">⚙️</span> 生产任务</button>' +
-      '<button class="menu-item" data-page="finished-products"><span class="menu-icon">🏗️</span> 成品管理</button>' +
+      '<button class="menu-item" data-page="workshops"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V7h16v14 M2 21h20 M8 3h8v4 M8 12h2 M14 12h2 M8 16h2 M14 16h2" /></svg></span> 车间管理</button>' +
+      '<button class="menu-item" data-page="productions"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3 M12 18v3 M3 12h3 M18 12h3 M6 6l2 2 M16 16l2 2 M6 18l2-2 M16 8l2-2 M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8" /></svg></span> 生产任务</button>' +
+      '<button class="menu-item" data-page="finished-products"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V7h16v14 M2 21h20 M8 3h8v4 M8 12h2 M14 12h2 M8 16h2 M14 16h2" /></svg></span> 成品管理</button>' +
       '<div class="menu-section">报表</div>' +
-      '<button class="menu-item" data-page="report"><span class="menu-icon">📊</span> 收发存汇总表</button>' +
+      '<button class="menu-item" data-page="report"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16 M7 16V9 M12 16V4 M17 16v-5" /></svg></span> 收发存汇总表</button>' +
       '<div class="menu-section">系统</div>' +
-      '<button class="menu-item" data-page="stock-logs"><span class="menu-icon">📝</span> 库存日志</button>' +
-      '<button class="menu-item" id="back-to-old" style="color:#ff4d4f;"><span class="menu-icon">🔙</span> 返回原系统</button>' +
+      '<button class="menu-item" data-page="stock-logs"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h14v18H5z M8 7h8 M8 11h8 M8 15h5" /></svg></span> 库存日志</button>' +
+      '<button class="menu-item" id="back-to-old" style="color:#ff4d4f;"><span class="menu-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5 M11 6l-6 6 6 6" /></svg></span> 切换系统</button>' +
       '</div>';
   }
 
@@ -371,7 +375,7 @@
   function renderMaterialsPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>📦 原材料管理</h1>' +
+      '<h1>原材料管理</h1>' +
       '<div class="header-actions">' +
       '<button class="btn btn-primary" onclick="window.__newModule && window.__newModule.showInboundDialog()">📥 入库</button>' +
       '<button class="btn" onclick="window.__newModule && window.__newModule.showOutboundDialog()">📤 出库</button>' +
@@ -643,7 +647,7 @@
   function renderSuppliersPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>🏭 供应商管理</h1>' +
+      '<h1>供应商管理</h1>' +
       '<div class="header-actions">' +
       '<button class="btn btn-primary" onclick="window.__newModule.showAddSupplierDialog()">➕ 添加供应商</button>' +
       '<button class="btn" onclick="window.__newModule.refreshSuppliers()">🔄 刷新</button>' +
@@ -858,7 +862,7 @@
   function renderWorkshopsPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>🏗️ 车间管理</h1>' +
+      '<h1>车间管理</h1>' +
       '<div class="header-actions">' +
       '<button class="btn btn-primary" onclick="window.__newModule.showAddWorkshopDialog()">➕ 添加车间</button>' +
       '<button class="btn" onclick="window.__newModule.refreshWorkshops()">🔄 刷新</button>' +
@@ -1014,7 +1018,7 @@
   function renderProductionsPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>⚙️ 生产任务管理</h1>' +
+      '<h1>生产任务管理</h1>' +
       '<div class="header-actions">' +
       '<button class="btn btn-primary" onclick="window.__newModule.showCreateProductionDialog()">➕ 新建生产任务</button>' +
       '<button class="btn" onclick="window.__newModule.refreshProductions()">🔄 刷新</button>' +
@@ -1394,7 +1398,7 @@
   function renderFinishedProductsPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>🏗️ 成品管理</h1>' +
+      '<h1>成品管理</h1>' +
       '<div class="header-actions">' +
       '<button class="btn" onclick="window.__newModule.refreshFinishedProducts()">🔄 刷新</button>' +
       '</div>' +
@@ -1550,7 +1554,7 @@
 
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>📊 收发存汇总表</h1>' +
+      '<h1>收发存汇总表</h1>' +
       '<div class="header-actions">' +
       '<button class="btn btn-primary" onclick="window.__newModule.printReport()">🖨️ 打印汇总表</button>' +
       '</div>' +
@@ -1701,7 +1705,7 @@
   function renderStockLogsPage(container) {
     var html = '<div class="page-container">' +
       '<div class="page-header">' +
-      '<h1>📝 库存变更日志</h1>' +
+      '<h1>库存变更日志</h1>' +
       '<div class="header-actions">' +
       '<button class="btn" onclick="window.__newModule.refreshStockLogs()">🔄 刷新</button>' +
       '</div>' +
@@ -1887,60 +1891,26 @@
 
   window.__newModule = api;
 
-  // ============================================================
-  // 添加导航按钮到原系统（不再使用右下角浮动按钮，避免打印时遮挡）
-  // ============================================================
-  function addGlobalNavButton() {
-    // 监听 DOM，把"生产管理"按钮注入到原系统页面的顶部导航栏
-    var observer = new MutationObserver(function() {
-      try {
-        var root = document.getElementById('root');
-        if (!root || root.style.display === 'none') return;
-        if (document.getElementById('global-nav-toggle')) return;
-        var btnGroup = document.querySelector('#root .page-header .btn-group');
-        if (!btnGroup) return;
-        var btn = document.createElement('button');
-        btn.id = 'global-nav-toggle';
-        btn.className = 'btn btn-primary';
-        btn.textContent = '📋 生产管理';
-        btn.addEventListener('click', function() {
-          if (window.__newModule) window.__newModule.toggleNewSystem();
-        });
-        btnGroup.appendChild(btn);
-      } catch (e) {}
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-
-  api.toggleNewSystem = function() {
-    var oldRoot = document.getElementById('root');
-    var newLayout = document.getElementById('new-modules-sidebar');
-
-    if (newLayout.style.display === 'none' || !newLayout.style.display) {
-      // 切换到新系统
-      oldRoot.style.display = 'none';
-      newLayout.style.display = 'flex';
-      // 隐藏顶部导航按钮（新系统内部通过侧边栏"返回原系统"切换）
-      var navBtn = document.getElementById('global-nav-toggle');
-      if (navBtn) navBtn.style.display = 'none';
-      // 加载数据
-      loadAllData().then(function() {
-        renderPage(state.currentPage);
-      });
-    } else {
-      // 切换回原系统
-      newLayout.style.display = 'none';
-      oldRoot.style.display = '';
-      var navBtn = document.getElementById('global-nav-toggle');
-      if (navBtn) navBtn.style.display = '';
-    }
+  // The platform owns system selection; this module only controls its own content.
+  api.canSwitchSystem = function() {
+    return !inventoryBusy && pendingInventoryWrites === 0 && !document.querySelector('.modal-overlay:not(.order-dialog-overlay), .detail-overlay');
   };
-
-  // 监听"返回原系统"按钮
+  api.setVisible = function(visible, host) {
+    setupApp();
+    var layout = document.getElementById('new-modules-sidebar');
+    if (!layout) return Promise.reject(new Error('生产库存界面尚未就绪'));
+    if (host && layout.parentNode !== host) host.appendChild(layout);
+    layout.style.display = visible ? 'flex' : 'none';
+    if (!visible) return Promise.resolve();
+    return loadAllData().then(function() { renderPage(state.currentPage); });
+  };
+  // Compatibility for local integrations; all entry changes still go through the platform.
+  api.toggleNewSystem = function() {
+    var production = document.querySelector('.workspace[data-system="production"]');
+    window.dispatchEvent(new CustomEvent('workspace:open-system', { detail: production ? 'orders' : 'production' }));
+  };
   document.addEventListener('click', function(e) {
-    if (e.target.closest('#back-to-old')) {
-      api.toggleNewSystem();
-    }
+    if (e.target.closest('#back-to-old')) window.dispatchEvent(new Event('workspace:choose-system'));
   });
 
   // 初始化

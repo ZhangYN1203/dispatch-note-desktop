@@ -10,9 +10,9 @@ const explanations: Record<OrderStatus, string> = {
 }
 export default function OrderStatusPanel({ status }: { status: OrderStatus }) {
   return <section className="order-status-panel" aria-label="当前订单状态">
-    <div className="order-status-heading">当前状态 <span className={`order-status status-${status}`}>{orderStatusLabels[status]}</span></div>
-    <p>{explanations[status]}</p>
-    {status === 'legacy' ? <p className="order-status-note">如需重新开单，可复制为新草稿并生成新单号。已经发出的历史订单请勿再次执行发货扣库。</p>
+    <div className="order-status-heading"><span className="status-caption">当前状态</span><span className={`order-status status-${status}`}>{orderStatusLabels[status]}</span></div>
+    <p className="status-explanation">{explanations[status]}</p>
+    {status === 'legacy' ? <details className="order-status-help"><summary>历史单据说明</summary><p className="order-status-note">如需重新开单，可复制为新草稿并生成新单号。已经发出的历史订单请勿再次执行发货扣库。</p></details>
       : <ol className="order-status-steps" aria-label="订单流程">{(['draft','confirmed','shipped'] as const).map((step,index) => <li key={step} aria-current={status === step ? 'step' : undefined}><span>{index + 1}</span>{orderStatusLabels[step]}{index === 0 ? '（可编辑）' : index === 1 ? '（不扣库）' : '（已扣库）'}</li>)}</ol>}
   </section>
 }

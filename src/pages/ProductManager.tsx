@@ -392,7 +392,7 @@ const ProductManager: React.FC = () => {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container product-manager-page">
       <div className="page-header">
         <h1>商品管理</h1>
         <div className="btn-group">
@@ -435,6 +435,9 @@ const ProductManager: React.FC = () => {
             {priceTables.map(t => (
               <div
                 key={t.id}
+                className="price-table-chip" data-selected={selectedTable?.id === t.id}
+                role="button" tabIndex={0} aria-pressed={selectedTable?.id === t.id}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectPriceTable(t) } }}
                 style={{
                   padding: '10px 16px',
                   background: selectedTable?.id === t.id ? '#e6f4ff' : '#fff',
@@ -482,7 +485,7 @@ const ProductManager: React.FC = () => {
                   {selectedTable.name} - 商品列表
                 </h2>
                 {isDefaultTable && (
-                  <span style={{ fontSize: 12, color: '#1677ff' }}>
+                  <span style={{ fontSize: 12, color: 'var(--accent)'  }}>
                     默认价格表为商品基础信息库，在此修改编码/名称会同步到所有价格表
                   </span>
                 )}

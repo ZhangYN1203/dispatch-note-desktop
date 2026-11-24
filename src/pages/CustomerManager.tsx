@@ -151,13 +151,14 @@ const CustomerManager: React.FC = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
                   {customers.map(c => (
                     <div
-                      key={c.id}
+                      className="customer-card" key={c.id} role="button" tabIndex={0}
+                      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedCustomer(c) } }}
                       style={{
                         padding: '14px 16px', background: '#fff', border: '1px solid #e8e8e8',
                         borderRadius: 8, cursor: 'pointer', transition: 'all 0.15s',
                       }}
                       onClick={() => setSelectedCustomer(c)}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#1677ff'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(22,119,255,0.15)' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(23,100,88,0.12)' }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#e8e8e8'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}
                     >
                       <div style={{ fontWeight: 600, fontSize: 14, color: '#333' }}>{c.name}</div>
@@ -170,7 +171,7 @@ const CustomerManager: React.FC = () => {
                         </div>
                       )}
                       {c.priceTableName && (
-                        <div style={{ fontSize: 12, color: '#1677ff', marginTop: 2 }}>
+                        <div style={{ fontSize: 12, color: 'var(--accent)' , marginTop: 2 }}>
                           价格表: {c.priceTableName}
                         </div>
                       )}
@@ -206,7 +207,7 @@ const CustomerManager: React.FC = () => {
                     <div>联系人: {selectedCustomer.contact || '-'} | {selectedCustomer.phone || '-'}</div>
                   )}
                   {selectedCustomer.priceTableName && (
-                    <div style={{ color: '#1677ff', marginTop: 2 }}>价格表: {selectedCustomer.priceTableName}</div>
+                    <div style={{ color: 'var(--accent)' , marginTop: 2 }}>价格表: {selectedCustomer.priceTableName}</div>
                   )}
                   {selectedCustomer.remark && <div style={{ marginTop: 2, color: '#999' }}>备注: {selectedCustomer.remark}</div>}
                 </div>

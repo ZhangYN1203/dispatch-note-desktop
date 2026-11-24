@@ -4,8 +4,8 @@
    ═══════════════════════════════════════════════════ */
 
 @page {
-  size: 240mm var(--page-height, 95mm);
-  margin: 0;
+  size: auto;
+  margin: 10mm;
 }
 
 @media print {

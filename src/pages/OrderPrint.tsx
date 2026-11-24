@@ -4,11 +4,13 @@ import { fetchOrderById, printWindow } from '../utils/ipc'
 import type { Order, OrderItem } from '../types'
 import { DEFAULT_PRINT_PROFILE, getDriverGuidance, getPageGeometry, getPrintErrorMessage } from '../../electron/print-profile'
 import type { PrintConfiguration, PrintProfile } from '../../electron/print-profile'
+import { useOrderSystemActive } from '../components/SystemActivity'
 import CalibrationSheet from '../components/CalibrationSheet'
 import PrintSettingsDialog from '../components/PrintSettingsDialog'
 import '../styles/print.css'
 
 const OrderPrint: React.FC = () => {
+  const isSystemActive = useOrderSystemActive()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const printRef = useRef<HTMLDivElement>(null)
@@ -43,6 +45,7 @@ const OrderPrint: React.FC = () => {
   }, [])
 
   useLayoutEffect(() => {
+    if (!isSystemActive) return
     const values: Record<string, string> = {
       '--print-paper-width': `${geometry.widthMm}mm`, '--page-height': `${geometry.heightMm}mm`,
       '--print-margin-top': `${profile.marginTopMm}mm`, '--print-margin-bottom': `${profile.marginBottomMm}mm`,
@@ -57,7 +60,7 @@ const OrderPrint: React.FC = () => {
       style.remove()
       for (const key of Object.keys(values)) document.documentElement.style.removeProperty(key)
     }
-  }, [profile])
+  }, [profile, isSystemActive])
 
   useEffect(() => {
     if (!id) return
@@ -73,7 +76,7 @@ const OrderPrint: React.FC = () => {
   }, [id])
 
   useLayoutEffect(() => {
-    if (!order || !printRef.current) return
+    if (!isSystemActive || !order || !printRef.current) return
     let active = true
     const measure = () => {
       if (!active) return
@@ -98,11 +101,11 @@ const OrderPrint: React.FC = () => {
     if (document.fonts.status === 'loaded') measure()
     else void document.fonts.ready.then(measure)
     return () => { active = false }
-  }, [layoutKey, rowsPerPage])
+  }, [layoutKey, rowsPerPage, isSystemActive])
 
   const openPrintDialog = useCallback(() => {
-    if (!printBusy.current && settingsReady && order) setDialogMode('print')
-  }, [settingsReady, order])
+    if (isSystemActive && !printBusy.current && settingsReady && order) setDialogMode('print')
+  }, [settingsReady, order, isSystemActive])
 
   const applyProfile = async (next: PrintProfile, print: boolean, calibrate = false) => {
     if (printBusy.current) return
@@ -119,22 +122,25 @@ const OrderPrint: React.FC = () => {
   }
 
   useEffect(() => {
-    if (!pendingPrint || !layoutReady) return
+    if (!isSystemActive || !pendingPrint || !layoutReady) return
     setPendingPrint(false)
     if (layoutError) { setPrintError(layoutError); printBusy.current = false; setPrinting(false); return }
     void printWindow(calibration ? { ...profile, copies: 1 } : profile).catch(error => setPrintError(getPrintErrorMessage(error)))
       .finally(() => { printBusy.current = false; setPrinting(false) })
-  }, [pendingPrint, layoutReady, layoutError, profile, calibration])
+  }, [pendingPrint, layoutReady, layoutError, profile, calibration, isSystemActive])
 
   useEffect(() => {
+    if (!isSystemActive) return
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') {
         event.preventDefault(); openPrintDialog()
       }
     }
+    const beforeSystemSwitch = (event: Event) => { if (printBusy.current || dialogMode) event.preventDefault() }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [openPrintDialog])
+    window.addEventListener('workspace:before-system-switch', beforeSystemSwitch)
+    return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('workspace:before-system-switch', beforeSystemSwitch) }
+  }, [openPrintDialog, isSystemActive, dialogMode])
 
   if (loading) return <div className="page-container"><div className="loading">加载中...</div></div>
   if (error || !order) return <div className="page-container">

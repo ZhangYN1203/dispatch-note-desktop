@@ -108,8 +108,12 @@ const OrderEdit: React.FC = () => {
   }, [blocker])
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty.current) { event.preventDefault(); event.returnValue = '' } }
+    const beforeSystemSwitch = (event: Event) => {
+      if (savingRef.current || (dirty.current && !window.confirm('订单尚未保存。切换后会保留本次编辑，返回订单系统可继续编辑。确定切换吗？'))) event.preventDefault()
+    }
     window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
+    window.addEventListener('workspace:before-system-switch', beforeSystemSwitch)
+    return () => { window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('workspace:before-system-switch', beforeSystemSwitch) }
   }, [])
   useEffect(() => {
     if (!loading && !clean.current) clean.current = serialized
@@ -377,9 +381,7 @@ const OrderEdit: React.FC = () => {
           <button className="btn" onClick={() => navigate('/')}>
             返回列表
           </button>
-          <button className="btn" onClick={() => navigate('/product-manager')}>
-            价格管理
-          </button>
+          {!isNew && <button className="btn" onClick={() => navigate(`/orders/${id}/view`)}>查看详情与状态</button>}
           <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
             {saving ? '保存中...' : '保存订单'}
           </button>
@@ -389,7 +391,6 @@ const OrderEdit: React.FC = () => {
       {error && <div className="error-message">{error}</div>}
 
       <OrderStatusPanel status="draft" />
-      {!isNew && <div className="order-state-actions"><button className="btn" onClick={() => navigate(`/orders/${id}/view`)}>查看详情与状态操作</button></div>}
       <div className="form-container">
         <div className="form-section order-essential">
           <h2>客户与开单信息</h2>
@@ -694,7 +695,7 @@ const OrderEdit: React.FC = () => {
                           min="0"
                           value={item.price || ''}
                           onChange={e => updateItem(item._tempId, 'price', parseFloat(e.target.value) || 0)}
-                          style={{ fontWeight: 600, color: '#cf1322' }}
+                          style={{ fontWeight: 600, color: 'var(--accent)' }}
                         />
                       </td>
                       <td style={{ textAlign: 'right', paddingRight: 12, fontWeight: 600 }}>

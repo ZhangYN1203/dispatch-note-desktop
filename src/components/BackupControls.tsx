@@ -24,12 +24,12 @@ export default function BackupControls() {
       setMessage(`操作失败：${error instanceof Error ? error.message : String(error)}`)
     } finally { busyRef.current = false; setBusy(false) }
   }
-  return <div className="card no-print" style={{ marginBottom: 16 }}>
-    <div className="btn-group">
+  return <div className="backup-toolbar no-print">
+    <div className="btn-group"><span className="backup-label">数据工具</span>
       <button className="btn" disabled={busy} onClick={() => run('backup')}>备份全部数据</button>
       <button className="btn" disabled={busy} onClick={() => run('restore')}>从备份恢复</button>
       <button className="btn" disabled={busy} onClick={() => run('import')}>导入商品与客户 Excel</button>
-      <span style={{ alignSelf: 'center', color: '#666', fontSize: 13 }}>备份包含全部业务数据；导入前会预览并自动备份。</span>
+      <span className="backup-description" style={{ alignSelf: 'center', color: '#666', fontSize: 13 }}>备份包含全部业务数据；导入前会预览并自动备份。</span>
     </div>
     {message && <p role="status" style={{ overflowWrap: 'anywhere' }}>{message}</p>}
   </div>

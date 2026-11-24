@@ -65,22 +65,15 @@ const OrderList: React.FC = () => {
     return d.slice(0, 10)
   }
 
+  const visibleOrders = orders.filter(order => !statusFilter || order.status === statusFilter)
+
   return (
     <div className="page-container">
       <div className="page-header">
-        <h1>商品装具调拨单</h1>
+        <div><span className="page-eyebrow">订单中心</span><h1>发货订单</h1></div>
         <div className="btn-group">
           <button className="btn btn-primary" onClick={() => navigate('/orders/new')}>
             + 新建订单
-          </button>
-          <button className="btn" onClick={() => navigate('/order-summary')}>
-            订单汇总
-          </button>
-          <button className="btn" onClick={() => navigate('/product-manager')}>
-            商品管理
-          </button>
-          <button className="btn" onClick={() => navigate('/customer-manager')}>
-            客户管理
           </button>
         </div>
       </div>
@@ -90,8 +83,7 @@ const OrderList: React.FC = () => {
       <p className="order-list-guide">新订单：草稿 → 确认订单（不扣库存）→ 整单发货（扣库存）。历史单据的发货状态未记录，仅供查看和打印。</p>
       {error && <div className="error-message">{error}</div>}
 
-      <div className="search-bar">
-        <select aria-label="订单状态" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="">全部状态</option>{Object.entries(orderStatusLabels).map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select>
+      <div className="order-list-tools"><div className="order-status-tabs" aria-label="订单状态筛选">{[['','全部'],...Object.entries(orderStatusLabels)].map(([key,label]) => <button key={key} className="order-status-tab" aria-pressed={statusFilter === key} onClick={() => setStatusFilter(key)}>{label}<span>{key ? orders.filter(order => order.status === key).length : orders.length}</span></button>)}</div><div className="search-bar">
         <input
           type="text"
           placeholder="搜索订单号、客户名称..."
@@ -112,18 +104,18 @@ const OrderList: React.FC = () => {
         >
           重置
         </button>
-      </div>
+      </div></div>
 
       {loading ? (
         <div className="loading">加载中...</div>
-      ) : orders.length === 0 ? (
+      ) : visibleOrders.length === 0 ? (
         <div className="card">
           <div className="empty-state">
-            <p>{search ? '未找到匹配的订单' : '暂无订单，请点击"新建订单"创建'}</p>
+            <p>{search || statusFilter ? '当前条件下没有订单，可切换状态或重置搜索' : '暂无订单，请点击"新建订单"创建'}</p>
           </div>
         </div>
       ) : (
-        <table className="data-table">
+        <div className="order-list-table"><table className="data-table">
           <thead>
             <tr>
               <th style={{ width: 60 }}>序号</th>
@@ -138,7 +130,7 @@ const OrderList: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {orders.filter(order => !statusFilter || order.status === statusFilter).map((order, index) => (
+            {visibleOrders.map((order, index) => (
               <tr key={order.id}>
                 <td>{index + 1}</td>
                 <td>{order.documentNo || '-'}</td>
@@ -170,8 +162,9 @@ const OrderList: React.FC = () => {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
+      {!loading && <div className="order-list-footer"><span>当前显示 {visibleOrders.length} 张单据</span><span>确认不扣库 · 发货扣库 · 状态变更均有记录</span></div>}
 
       {moreOrder && <OrderMoreDialog order={moreOrder} onClose={() => setMoreOrder(null)}
         onCopy={() => { setMoreOrder(null); navigate('/orders/new', { state: { copyFrom: moreOrder.id } }) }}

@@ -89,7 +89,7 @@ const OrderSummary: React.FC = () => {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container summary-page">
       <div className="page-header">
         <h1>订单汇总查询</h1>
         <div className="btn-group">
@@ -101,8 +101,8 @@ const OrderSummary: React.FC = () => {
 
       {error && <div className="error-message">{error}</div>}
 
-      <p>按订单日期汇总，默认包含未发货单但不含作废单。可选择“已发货”查看已发货订单口径，实际库存以库存流水为准。</p>
-      <label>状态 <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setSearched(false); setDetails([]); setSummary([]) }}><option value="">有效订单（不含作废）</option>{Object.entries(orderStatusLabels).filter(([key]) => key !== 'voided').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <p className="summary-hint">按订单日期汇总，默认包含未发货单但不含作废单。可选择“已发货”查看已发货订单口径，实际库存以库存流水为准。</p>
+
       {/* 时间段选择 */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -122,6 +122,7 @@ const OrderSummary: React.FC = () => {
               onChange={e => setDateTo(e.target.value)}
             />
           </div>
+      <label className="form-field">订单状态 <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setSearched(false); setDetails([]); setSummary([]) }}><option value="">有效订单（不含作废）</option>{Object.entries(orderStatusLabels).filter(([key]) => key !== 'voided').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
           <button className="btn btn-primary" onClick={handleSearch} disabled={loading}>
             {loading ? '查询中...' : '查询'}
           </button>
