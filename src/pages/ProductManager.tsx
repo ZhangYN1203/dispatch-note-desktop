@@ -28,6 +28,8 @@ const ProductManager: React.FC = () => {
   const [priceSearch, setPriceSearch] = useState('')
 
   // ── Edit price ──
+  const priceSavingRef = useRef(false)
+  const [savingPrice, setSavingPrice] = useState(false)
   const [editingCode, setEditingCode] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
 
@@ -38,6 +40,7 @@ const ProductManager: React.FC = () => {
   // ── Edit product info (only on default table) ──
   const [editProductData, setEditProductData] = useState<Product | null>(null)
   const [savingProduct, setSavingProduct] = useState(false)
+  const [editProductError, setEditProductError] = useState('')
 
   // ── Add/Edit price table dialog ──
   const [showAddTable, setShowAddTable] = useState(false)
@@ -57,6 +60,8 @@ const ProductManager: React.FC = () => {
   const [newProductData, setNewProductData] = useState<{ brand: string; productCode: string; productName: string; specification: string; packageSpec: string; unit: string; price: number }>({
     brand: '', productCode: '', productName: '', specification: '', packageSpec: '', unit: '件', price: 0,
   })
+  const newProductSavingRef = useRef(false)
+  const [newProductError, setNewProductError] = useState('')
   const [savingNewProduct, setSavingNewProduct] = useState(false)
 
   // ── Confirm delete ──
@@ -199,23 +204,25 @@ const ProductManager: React.FC = () => {
   }
 
   const handleSavePrice = async (productCode: string) => {
-    const newPrice = parseFloat(editValue)
-    if (isNaN(newPrice) || newPrice < 0) {
+    if (priceSavingRef.current) return
+    const newPrice = editValue.trim() ? Number(editValue) : NaN
+    if (!Number.isFinite(newPrice) || newPrice < 0) {
       setMessage('请输入有效的价格')
       return
     }
     if (!selectedTable) return
 
+    priceSavingRef.current = true; setSavingPrice(true)
     try {
       const result = await updatePriceTableItem(selectedTable.id, productCode, newPrice)
       if (result.success) {
         setMessage(`价格已更新：${productCode} → ¥${newPrice.toFixed(2)}`)
         setEditingCode(null)
-        loadPrices()
-      }
+        await loadPrices()
+      } else { setMessage(result.message || '更新失败') }
     } catch (err: any) {
       setMessage(`更新失败: ${err.message}`)
-    }
+    } finally { priceSavingRef.current = false; setSavingPrice(false) }
   }
 
   // ── Edit product basic info (only on default table) ──
@@ -225,6 +232,7 @@ const ProductManager: React.FC = () => {
     searchProducts(p.productCode).then(products => {
       const prod = products.find(pr => pr.productCode === p.productCode)
       if (prod) {
+        setEditProductError('')
         setEditProductData({ ...prod })
       } else {
         setMessage('未找到该商品信息')
@@ -233,34 +241,35 @@ const ProductManager: React.FC = () => {
   }
 
   const saveEditProduct = async () => {
-    if (!editProductData) return
+    if (!editProductData || savingProduct) return
+    setEditProductError('')
     if (!editProductData.productCode.trim()) {
-      setMessage('产品编码不能为空')
+      setEditProductError('产品编码不能为空')
       return
     }
     if (!editProductData.productName.trim()) {
-      setMessage('产品名称不能为空')
+      setEditProductError('产品名称不能为空')
       return
     }
     try {
       setSavingProduct(true)
       const result = await updateProduct(editProductData.id, {
+        brand: editProductData.brand,
         productCode: editProductData.productCode,
         productName: editProductData.productName,
         specification: editProductData.specification,
         packageSpec: editProductData.packageSpec,
         unit: editProductData.unit,
-        price: editProductData.price,
       })
       if (result.success) {
         setMessage('商品信息已更新，所有价格表引用已同步')
         setEditProductData(null)
         loadPrices()
       } else {
-        setMessage(result.message || '更新失败')
+        setEditProductError(result.message || '更新失败')
       }
     } catch (err: any) {
-      setMessage(`更新失败: ${err.message}`)
+      setEditProductError(`更新失败: ${err.message}`)
     } finally {
       setSavingProduct(false)
     }
@@ -352,32 +361,28 @@ const ProductManager: React.FC = () => {
 
   // ── Add new product (adds to catalog AND syncs to all price tables) ──
   const handleSaveNewProduct = async () => {
+    if (newProductSavingRef.current) return
+    setNewProductError('')
     if (!newProductData.productCode.trim()) {
-      setMessage('产品编码为必填')
+      setNewProductError('产品编码为必填')
       return
     }
     if (!newProductData.productName.trim()) {
-      setMessage('产品名称为必填')
-      return
-    }
-    if (!newProductData.specification.trim()) {
-      setMessage('规格为必填')
-      return
-    }
-    if (!newProductData.packageSpec.trim()) {
-      setMessage('整箱规格为必填')
+      setNewProductError('产品名称为必填')
       return
     }
     if (!newProductData.unit.trim()) {
-      setMessage('单位为必填')
+      setNewProductError('单位为必填')
       return
     }
 
+    if (!Number.isFinite(newProductData.price) || newProductData.price < 0) { setNewProductError('请输入有效的非负单价'); return }
+    newProductSavingRef.current = true
     try {
       setSavingNewProduct(true)
       const result = await createProduct(newProductData)
       if (result.id === -1 || (result as any).error) {
-        setMessage((result as any).error || '添加失败')
+        setNewProductError((result as any).error || '添加失败')
         return
       }
       setMessage(`新产品「${newProductData.productName}」已添加，已同步到默认价格表`)
@@ -385,8 +390,9 @@ const ProductManager: React.FC = () => {
       setNewProductData({ brand: '', productCode: '', productName: '', specification: '', packageSpec: '', unit: '件', price: 0 })
       if (selectedTable) loadPrices()
     } catch (err: any) {
-      setMessage(`添加失败: ${err.message}`)
+      setNewProductError(`添加失败: ${err.message}`)
     } finally {
+      newProductSavingRef.current = false
       setSavingNewProduct(false)
     }
   }
@@ -486,7 +492,7 @@ const ProductManager: React.FC = () => {
                 </h2>
                 {isDefaultTable && (
                   <span style={{ fontSize: 12, color: 'var(--accent)'  }}>
-                    默认价格表为商品基础信息库，在此修改编码/名称会同步到所有价格表
+                    点击“修改价格”调整默认售价；仅影响采用默认表的新开单，不覆盖自定义价格及旧单
                   </span>
                 )}
               </div>
@@ -536,17 +542,18 @@ const ProductManager: React.FC = () => {
                                   type="number"
                                   step="0.01"
                                   min="0"
+                                  aria-label={`商品单价 ${p.productCode}`} disabled={savingPrice}
                                   value={editValue}
                                   onChange={e => setEditValue(e.target.value)}
                                   onKeyDown={e => {
                                     if (e.key === 'Enter') handleSavePrice(p.productCode)
-                                    if (e.key === 'Escape') setEditingCode(null)
+                                    if (e.key === 'Escape' && !savingPrice) setEditingCode(null)
                                   }}
                                   style={{ width: 100, textAlign: 'right' }}
                                   autoFocus
                                 />
-                                <button className="btn btn-sm btn-primary" onClick={() => handleSavePrice(p.productCode)}>保存</button>
-                                <button className="btn btn-sm" onClick={() => setEditingCode(null)}>取消</button>
+                                <button className="btn btn-sm btn-primary" disabled={savingPrice} onClick={() => handleSavePrice(p.productCode)}>{savingPrice ? '保存中...' : '保存'}</button>
+                                <button className="btn btn-sm" disabled={savingPrice} onClick={() => setEditingCode(null)}>取消</button>
                               </div>
                             ) : (
                               <span style={{ fontWeight: 500 }}>¥{p.price.toFixed(2)}</span>
@@ -556,11 +563,8 @@ const ProductManager: React.FC = () => {
                             <div className="btn-group" style={{ gap: 4 }}>
                               {editingCode !== p.productCode && (
                                 <>
-                                  {isDefaultTable ? (
-                                    <button className="btn btn-sm" onClick={() => handleEditProductInfo(p)}>编辑</button>
-                                  ) : (
-                                    <button className="btn btn-sm" onClick={() => handleEditPrice(p.productCode, p.price)}>修改价格</button>
-                                  )}
+                                  {isDefaultTable && <button className="btn btn-sm" onClick={() => handleEditProductInfo(p)}>商品信息</button>}
+                                  <button className="btn btn-sm" onClick={() => handleEditPrice(p.productCode, p.price)}>修改价格</button>
                                   {!isDefaultTable && (
                                     <button className="btn btn-sm btn-danger" onClick={() => handleRemoveProduct(p.productCode, p.productName || p.productCode)}>删除</button>
                                   )}
@@ -581,7 +585,7 @@ const ProductManager: React.FC = () => {
                     + 从默认价格表添加产品
                   </button>
                 )}
-                <button className="btn btn-sm" onClick={() => { setShowNewProduct(true); setNewProductData({ brand: '', productCode: '', productName: '', specification: '', packageSpec: '', unit: '件', price: 0 }) }}>
+                <button className="btn btn-sm" onClick={() => { setNewProductError(''); setShowNewProduct(true); setNewProductData({ brand: '', productCode: '', productName: '', specification: '', packageSpec: '', unit: '件', price: 0 }) }}>
                   + 添加新商品
                 </button>
               </div>
@@ -712,7 +716,7 @@ const ProductManager: React.FC = () => {
           <div className="confirm-dialog" style={{ minWidth: 520 }}>
             <h3>编辑商品信息</h3>
             <div style={{ fontSize: 12, color: '#d46b08', marginBottom: 8, background: '#fff7e6', padding: '8px 12px', borderRadius: 6 }}>
-              修改编码、名称等信息将自动同步到所有价格表和已有订单
+              修改商品资料会更新价格表中的商品显示；已保存订单保留原始快照。价格请使用“修改价格”调整。
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
               <div className="form-field">
@@ -741,7 +745,8 @@ const ProductManager: React.FC = () => {
               </div>
             </div>
             <div className="btn-group" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setEditProductData(null)}>取消</button>
+              {editProductError && <p className="error-message" role="alert">{editProductError}</p>}
+              <button className="btn" disabled={savingProduct} onClick={() => setEditProductData(null)}>取消</button>
               <button className="btn btn-primary" onClick={saveEditProduct} disabled={savingProduct}>
                 {savingProduct ? '保存中...' : '保存'}
               </button>
@@ -765,27 +770,34 @@ const ProductManager: React.FC = () => {
               </div>
               <div className="form-field">
                 <label>产品编码 *</label>
-                <input value={newProductData.productCode} onChange={e => setNewProductData(p => ({ ...p, productCode: e.target.value }))} placeholder="如: 90030" />
+                <input aria-label="新增商品编码" disabled={savingNewProduct} value={newProductData.productCode} onChange={e => setNewProductData(p => ({ ...p, productCode: e.target.value }))} placeholder="如: 90030" />
               </div>
               <div className="form-field" style={{ gridColumn: '1 / -1' }}>
                 <label>产品名称 *</label>
-                <input value={newProductData.productName} onChange={e => setNewProductData(p => ({ ...p, productName: e.target.value }))} placeholder="如: 油辣椒" />
+                <input aria-label="新增商品名称" disabled={savingNewProduct} value={newProductData.productName} onChange={e => setNewProductData(p => ({ ...p, productName: e.target.value }))} placeholder="如: 油辣椒" />
               </div>
               <div className="form-field">
                 <label>规格</label>
-                <input value={newProductData.specification} onChange={e => setNewProductData(p => ({ ...p, specification: e.target.value }))} placeholder="如: 200g" />
+                <input aria-label="新增商品规格" disabled={savingNewProduct} value={newProductData.specification} onChange={e => setNewProductData(p => ({ ...p, specification: e.target.value }))} placeholder="如: 200g" />
               </div>
               <div className="form-field">
                 <label>整箱规格</label>
-                <input value={newProductData.packageSpec} onChange={e => setNewProductData(p => ({ ...p, packageSpec: e.target.value }))} placeholder="如: 1x20" />
+                <input aria-label="新增商品箱规" disabled={savingNewProduct} value={newProductData.packageSpec} onChange={e => setNewProductData(p => ({ ...p, packageSpec: e.target.value }))} placeholder="如: 1x20" />
               </div>
               <div className="form-field">
                 <label>单位</label>
                 <input value={newProductData.unit} onChange={e => setNewProductData(p => ({ ...p, unit: e.target.value }))} placeholder="件" />
               </div>
+              <div className="form-field">
+                <label>单价（元/单位） *</label>
+                <input aria-label="新增商品单价" type="number" min="0" step="0.01" disabled={savingNewProduct}
+                  value={Number.isFinite(newProductData.price) ? newProductData.price : ''}
+                  onChange={e => setNewProductData(p => ({ ...p, price: e.target.value.trim() ? Number(e.target.value) : NaN }))} />
+              </div>
             </div>
+            {newProductError && <p className="error-message" role="alert">{newProductError}</p>}
             <div className="btn-group" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => { setShowNewProduct(false) }}>取消</button>
+              <button className="btn" disabled={savingNewProduct} onClick={() => { setShowNewProduct(false) }}>取消</button>
               <button className="btn btn-primary" onClick={handleSaveNewProduct} disabled={savingNewProduct}>
                 {savingNewProduct ? '保存中...' : '保存'}
               </button>

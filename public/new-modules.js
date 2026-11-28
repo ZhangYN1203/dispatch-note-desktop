@@ -240,8 +240,12 @@
     selectedProduct: null,
     // 筛选条件
     materialFilter: '',
+    materialOnlyLow: false,
     supplierFilter: '',
     productionFilter: '',
+    productionStatusFilter: '',
+    logTypeFilter: '',
+    logChangeFilter: '',
     productFilter: '',
     // 编辑状态
     editingSupplier: null,
@@ -356,6 +360,10 @@
   function renderPage(page) {
     var content = document.getElementById('new-modules-content');
     if (!content) return;
+    var active = document.activeElement;
+    var focusId = active && content.contains(active) ? active.id : '';
+    var selectionStart = focusId ? active.selectionStart : null;
+    var selectionEnd = focusId ? active.selectionEnd : null;
 
     switch (page) {
       case 'materials': renderMaterialsPage(content); break;
@@ -366,6 +374,19 @@
       case 'report': renderReportPage(content); break;
       case 'stock-logs': renderStockLogsPage(content); break;
       default: renderMaterialsPage(content);
+    }
+    var filters = {
+      'material-search': state.materialFilter, 'supplier-search': state.supplierFilter,
+      'production-search': state.productionFilter, 'production-status-filter': state.productionStatusFilter,
+      'log-type-filter': state.logTypeFilter, 'log-change-filter': state.logChangeFilter
+    };
+    Object.keys(filters).forEach(function(id) { var element = document.getElementById(id); if (element) element.value = filters[id]; });
+    var lowFilter = document.getElementById('material-low-filter');
+    if (lowFilter) lowFilter.checked = state.materialOnlyLow;
+    var restored = focusId && document.getElementById(focusId);
+    if (restored) {
+      restored.focus();
+      if (selectionStart !== null && typeof restored.setSelectionRange === 'function') restored.setSelectionRange(selectionStart, selectionEnd);
     }
   }
 
@@ -428,6 +449,7 @@
           '<div class="table-actions">' +
           '<button class="btn-link" onclick="window.__newModule.showInboundForMaterial(' + m.id + ')">入库</button>' +
           '<button class="btn-link" onclick="window.__newModule.showOutboundForMaterial(' + m.id + ')">出库</button>' +
+          '<button class="btn-link" onclick="window.__newModule.showEditMaterialDialog(' + m.id + ')">编辑</button>' +
           '<button class="btn-link danger" onclick="window.__newModule.deleteMaterial(' + m.id + ')">删除</button>' +
           '</div>' +
           '</td></tr>';
@@ -441,7 +463,7 @@
   function getFilteredMaterials() {
     var list = state.materials.slice();
     var keyword = (state.materialFilter || '').toLowerCase();
-    var onlyLow = document.getElementById('material-low-filter') && document.getElementById('material-low-filter').checked;
+    var onlyLow = state.materialOnlyLow;
 
     if (keyword) {
       list = list.filter(function(m) { return m.name.toLowerCase().indexOf(keyword) >= 0; });
@@ -639,6 +661,44 @@
     }).catch(function(err) {
       showToast('删除失败: ' + err.message, 'error');
     });
+  }
+
+  function showEditMaterialDialog(id) {
+    var material = state.materials.find(function(row) { return row.id === id; });
+    if (!material) return;
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'edit-material-modal';
+    overlay.innerHTML = '<div class="modal-dialog"><h3>编辑原材料</h3><div class="modal-body"><div class="form-grid">' +
+      '<div class="form-field"><label>原材料名称 *</label><input id="edit-mat-name" value="' + escapeHtml(material.name) + '"></div>' +
+      '<div class="form-field"><label>规格</label><input id="edit-mat-spec" value="' + escapeHtml(material.spec || '') + '"></div>' +
+      '<div class="form-field"><label>单位 *</label><input id="edit-mat-unit" value="' + escapeHtml(material.unit || '') + '"></div>' +
+      '<div class="form-field"><label>当前库存（请通过入库或出库调整）</label><input value="' + material.quantity + '" readonly></div>' +
+      '<div class="form-field"><label>最低库存预警值</label><input id="edit-mat-min" type="number" min="0" step="0.01" value="' + (material.min_quantity || 0) + '"></div>' +
+      '<div class="form-field"><label>供应商</label><select id="edit-mat-supplier"><option value="">无</option>' + state.suppliers.map(function(s) {
+        return '<option value="' + s.id + '"' + (s.id === material.supplier_id ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
+      }).join('') + '</select></div><div class="form-field"><label>备注</label><textarea id="edit-mat-remark">' + escapeHtml(material.remark || '') + '</textarea></div>' +
+      '</div></div><div class="modal-footer"><button class="btn" onclick="document.getElementById(\'edit-material-modal\').remove()">取消</button>' +
+      '<button class="btn btn-primary" onclick="window.__newModule.confirmEditMaterial(' + id + ')">保存</button></div></div>';
+    document.body.appendChild(overlay);
+  }
+
+  function confirmEditMaterial(id) {
+    var material = state.materials.find(function(row) { return row.id === id; });
+    if (!material) return;
+    var name = document.getElementById('edit-mat-name').value.trim();
+    var unit = document.getElementById('edit-mat-unit').value.trim();
+    var minQuantity = Number(document.getElementById('edit-mat-min').value);
+    if (!name || !unit) { showToast('请输入原材料名称和单位', 'error'); return; }
+    if (!Number.isFinite(minQuantity) || minQuantity < 0) { showToast('最低库存预警值无效', 'error'); return; }
+    var updated = Object.assign({}, material, { name: name, unit: unit, spec: document.getElementById('edit-mat-spec').value.trim(),
+      min_quantity: minQuantity, supplier_id: Number(document.getElementById('edit-mat-supplier').value) || null,
+      remark: document.getElementById('edit-mat-remark').value.trim(), updated_at: now() });
+    return updateInStore('materials', updated).then(function() {
+      document.getElementById('edit-material-modal').remove();
+      showToast('原材料信息已保存');
+      return loadAllData();
+    }).then(function() { renderPage(state.currentPage); }).catch(function(error) { showToast('保存失败：' + error.message, 'error'); });
   }
 
   // ============================================================
@@ -1085,12 +1145,8 @@
 
   function getFilteredProductions() {
     var list = state.productions.slice();
-    var keyword = '';
-    var searchEl = document.getElementById('production-search');
-    if (searchEl) keyword = searchEl.value.toLowerCase();
-    var statusFilter = '';
-    var statusEl = document.getElementById('production-status-filter');
-    if (statusEl) statusFilter = statusEl.value;
+    var keyword = state.productionFilter.toLowerCase();
+    var statusFilter = state.productionStatusFilter;
 
     if (keyword) {
       list = list.filter(function(p) {
@@ -1587,6 +1643,11 @@
     var toEl = document.getElementById('report-date-to');
     var dateFrom = fromEl ? fromEl.value : '';
     var dateTo = toEl ? toEl.value : '';
+    if (!dateFrom || !dateTo || dateFrom > dateTo) {
+      content.textContent = '请选择有效日期范围，起始日期不能晚于结束日期';
+      showToast('请选择有效日期范围，起始日期不能晚于结束日期', 'error');
+      return;
+    }
 
     // �期初/入库/出库统计
     var matInboundByMat = {};   // 本期原材料入库
@@ -1594,6 +1655,13 @@
     var matBeforeByMat = {};    // 期初结存（之前累计 入库-出库）
     var matCumInbound = {};     // 累计入库
     var matCumOutbound = {};    // 累计出库
+
+    state.stockLogs.forEach(function(log) {
+      if (log.stock_type !== 'material' || log.change_type !== 'opening') return;
+      var day = getDateOnly(log.created_at);
+      if (day < dateFrom) matCumInbound[log.item_id] = (matCumInbound[log.item_id] || 0) + log.quantity;
+      if (day >= dateFrom && day <= dateTo) matInboundByMat[log.item_id] = (matInboundByMat[log.item_id] || 0) + log.quantity;
+    });
 
     state.materialInbounds.forEach(function(r) {
       var day = getDateOnly(r.created_at);
@@ -1637,6 +1705,17 @@
 
     // 渲染
     var html = '';
+    var untracked = state.materials.filter(function(material) {
+      var recorded = state.materialInbounds.reduce(function(sum, row) { return sum + (row.material_id === material.id ? row.quantity : 0); }, 0) -
+        state.materialOutbounds.reduce(function(sum, row) { return sum + (row.material_id === material.id ? row.quantity : 0); }, 0) +
+        state.stockLogs.reduce(function(sum, log) { return sum + (log.stock_type === 'material' && log.item_id === material.id && log.change_type === 'opening' ? log.quantity : 0); }, 0);
+      return Math.abs(recorded - material.quantity) > 0.000001;
+    });
+    if (untracked.length) {
+      html += '<div role="status" class="report-history-warning">历史流水不完整：' + untracked.map(function(material) {
+        return escapeHtml(material.name) + '（当前库存 ' + material.quantity + '）';
+      }).join('、') + '。以下汇总仅统计已记录流水，缺失余额的发生日期未知，未计入历史期初或本期入库；请结合当前库存核对。</div>';
+    }
 
     // 原材料收发存
     html += '<div class="report-section"><h2>📦 原材料收发存汇总（' + (dateFrom || '全部') + ' 至 ' + (dateTo || '全部') + '）</h2>';
@@ -1732,12 +1811,8 @@
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-    var typeFilter = '';
-    var changeFilter = '';
-    var typeEl = document.getElementById('log-type-filter');
-    var changeEl = document.getElementById('log-change-filter');
-    if (typeEl) typeFilter = typeEl.value;
-    if (changeEl) changeFilter = changeEl.value;
+    var typeFilter = state.logTypeFilter;
+    var changeFilter = state.logChangeFilter;
 
     if (typeFilter) logs = logs.filter(function(l) { return l.stock_type === typeFilter; });
     if (changeFilter) logs = logs.filter(function(l) { return l.change_type === changeFilter; });
@@ -1799,6 +1874,8 @@
   function filterMaterials() {
     var el = document.getElementById('material-search');
     if (el) state.materialFilter = el.value;
+    var low = document.getElementById('material-low-filter');
+    if (low) state.materialOnlyLow = low.checked;
     renderPage('materials');
   }
 
@@ -1809,10 +1886,14 @@
   }
 
   function filterProductions() {
+    state.productionFilter = document.getElementById('production-search').value;
+    state.productionStatusFilter = document.getElementById('production-status-filter').value;
     renderPage('productions');
   }
 
   function filterStockLogs() {
+    state.logTypeFilter = document.getElementById('log-type-filter').value;
+    state.logChangeFilter = document.getElementById('log-change-filter').value;
     renderPage('stock-logs');
   }
 
@@ -1837,6 +1918,8 @@
     confirmOutbound: confirmOutbound,
     showAddMaterialDialog: showAddMaterialDialog,
     confirmAddMaterial: confirmAddMaterial,
+    showEditMaterialDialog: showEditMaterialDialog,
+    confirmEditMaterial: confirmEditMaterial,
     deleteMaterial: deleteMaterial,
     refreshMaterials: refreshMaterials,
     filterMaterials: filterMaterials,

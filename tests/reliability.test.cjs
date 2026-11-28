@@ -408,3 +408,50 @@ test('旧版数据库升级先保留原文件，历史订单不追溯扣库存�
   assert.equal(h.getOrderById(created.id).status, 'draft');
   assert.notEqual(h.getOrderById(created.id).documentNo, 'OLD-DUP');
 });
+
+
+test('默认表改价同步基础价，独立价和旧单保持不变，撤销同步恢复并可持久化', async () => {
+  const product=h.createProduct({productCode:'PRICE-FIX',productName:'改价回归',unit:'件',price:12});
+  const defaultId=db.queryOne('SELECT id FROM price_tables WHERE isDefault=1').id;
+  const customId=h.createPriceTable('改价专属表').id;
+  h.updatePriceTableItem(customId,'PRICE-FIX',8);
+  const order=h.saveOrderWithItems({},[{productCode:'PRICE-FIX',productName:'改价回归',unit:'件',quantity:2,price:12}]);
+  h.updatePriceTableItem(defaultId,'PRICE-FIX',13.5);
+  assert.equal(db.queryOne('SELECT price FROM products WHERE id=?',[product.id]).price,13.5);
+  assert.equal(h.getPriceTableItems(customId).find(p=>p.productCode==='PRICE-FIX').price,8);
+  assert.equal(h.getOrderById(order.id).items[0].amount,24);
+  db.closeDatabase();await db.initDatabase(filename);
+  assert.equal(h.getPriceTableItems(defaultId).find(p=>p.productCode==='PRICE-FIX').price,13.5);
+  h.undoLastPriceChange(defaultId);
+  assert.equal(db.queryOne('SELECT price FROM products WHERE id=?',[product.id]).price,12);
+  db.getDb().run("CREATE TRIGGER reject_price_log BEFORE INSERT ON price_change_log BEGIN SELECT RAISE(ABORT,'改价流水失败'); END");
+  assert.throws(()=>h.updatePriceTableItem(defaultId,'PRICE-FIX',99),/改价流水失败/);
+  assert.equal(h.getPriceTableItems(defaultId).find(p=>p.productCode==='PRICE-FIX').price,12);
+  assert.equal(db.queryOne('SELECT price FROM products WHERE id=?',[product.id]).price,12);
+  db.getDb().run('DROP TRIGGER reject_price_log');
+  for(const price of [-1,NaN,Infinity])assert.throws(()=>h.updatePriceTableItem(defaultId,'PRICE-FIX',price));
+});
+
+
+test('新增商品拒绝无效单价，明细同步失败时商品和所有价格一起回滚', () => {
+  for(const price of [-1,NaN,Infinity]) assert.equal(h.createProduct({productCode:'INVALID-NEW',productName:'无效单价商品',unit:'件',price}).id,-1);
+  db.getDb().run("CREATE TRIGGER reject_new_price BEFORE INSERT ON price_table_items WHEN NEW.productCode='CREATE-ROLLBACK' BEGIN SELECT RAISE(ABORT,'新增价格失败'); END");
+  assert.throws(()=>h.createProduct({productCode:'CREATE-ROLLBACK',productName:'新增回滚',unit:'件',price:27.5}),/新增价格失败/);
+  assert.equal(h.searchProducts('CREATE-ROLLBACK').length,0);
+  db.getDb().run('DROP TRIGGER reject_new_price');
+});
+
+test('商品改编码同步改价日志，事务失败保留原编码及引用', () => {
+  const product = h.createProduct({ productCode: 'RENAME-OLD', productName: '编码事务商品', unit: '件', price: 10 });
+  const table = h.createPriceTable('编码事务专属表');
+  h.updatePriceTableItem(table.id, 'RENAME-OLD', 8);
+  db.getDb().run("CREATE TRIGGER reject_rename_log BEFORE UPDATE ON price_change_log WHEN OLD.productCode='RENAME-OLD' BEGIN SELECT RAISE(ABORT,'编码日志失败'); END");
+  assert.throws(() => h.updateProduct(product.id, { productCode: 'RENAME-NEW' }), /编码日志失败/);
+  assert.equal(h.searchProducts('RENAME-OLD')[0].id, product.id);
+  assert.ok(h.getPriceTableItems(table.id).some(p => p.productCode === 'RENAME-OLD'));
+  db.getDb().run('DROP TRIGGER reject_rename_log');
+  assert.equal(h.updateProduct(product.id, { productCode: 'RENAME-NEW', brand: '更新品牌' }).success, true);
+  h.undoLastPriceChange(table.id);
+  assert.equal(h.getPriceTableItems(table.id).find(p => p.productCode === 'RENAME-NEW').price, 10);
+  assert.equal(h.searchProducts('RENAME-NEW')[0].brand, '更新品牌');
+});

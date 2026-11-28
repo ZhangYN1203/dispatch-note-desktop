@@ -1,6 +1,6 @@
 import { orderStatusLabels } from '../../electron/order-status'
 import type { OrderStatus } from '../../electron/order-status'
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getOrderSummary, saveFile } from '../utils/ipc'
 import * as XLSX from 'xlsx'
@@ -17,6 +17,15 @@ const OrderSummary: React.FC = () => {
   const [details, setDetails] = useState<any[]>([])
   const [summary, setSummary] = useState<any[]>([])
   const [searched, setSearched] = useState(false)
+  const queryVersion = useRef(0)
+  const invalidateResults = () => {
+    queryVersion.current++
+    setLoading(false)
+    setSearched(false)
+    setDetails([])
+    setSummary([])
+    setError('')
+  }
 
   const handleSearch = async () => {
     if (!dateFrom || !dateTo) {
@@ -27,17 +36,19 @@ const OrderSummary: React.FC = () => {
       setError('开始日期不能晚于结束日期')
       return
     }
+    const version = ++queryVersion.current
     try {
       setLoading(true)
       setError('')
       const result = await getOrderSummary(dateFrom, dateTo, statusFilter)
+      if (version !== queryVersion.current) return
       setDetails(result.details)
       setSummary(result.summary)
       setSearched(true)
     } catch (err: any) {
-      setError(err.message || '查询失败')
+      if (version === queryVersion.current) setError(err.message || '查询失败')
     } finally {
-      setLoading(false)
+      if (version === queryVersion.current) setLoading(false)
     }
   }
 
@@ -111,7 +122,7 @@ const OrderSummary: React.FC = () => {
             <input
               type="date"
               value={dateFrom}
-              onChange={e => setDateFrom(e.target.value)}
+              onChange={e => { setDateFrom(e.target.value); invalidateResults() }}
             />
           </div>
           <div className="form-field" style={{ minWidth: 160 }}>
@@ -119,10 +130,10 @@ const OrderSummary: React.FC = () => {
             <input
               type="date"
               value={dateTo}
-              onChange={e => setDateTo(e.target.value)}
+              onChange={e => { setDateTo(e.target.value); invalidateResults() }}
             />
           </div>
-      <label className="form-field">订单状态 <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setSearched(false); setDetails([]); setSummary([]) }}><option value="">有效订单（不含作废）</option>{Object.entries(orderStatusLabels).filter(([key]) => key !== 'voided').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label className="form-field">订单状态 <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value); invalidateResults() }}><option value="">有效订单（不含作废）</option>{Object.entries(orderStatusLabels).filter(([key]) => key !== 'voided').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
           <button className="btn btn-primary" onClick={handleSearch} disabled={loading}>
             {loading ? '查询中...' : '查询'}
           </button>

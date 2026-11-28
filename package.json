@@ -1,6 +1,6 @@
 {
   "name": "dispatch-note-desktop",
-  "version": "1.4.0",
+  "version": "1.4.3",
   "description": "本地订单与发货单打印系统：客户定价、整单事务、Excel 导入导出、分页打印和完整备份",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "test:electron": "npm run build:vite && tsc -p tsconfig.electron.json && electron tests/electron-smoke.cjs",
     "check:public": "node scripts/check-public.cjs",
-    "demo:screenshots": "npm run build:vite && tsc -p tsconfig.electron.json && electron scripts/capture-demo.cjs"
+    "demo:screenshots": "npm run build:vite && tsc -p tsconfig.electron.json && electron scripts/capture-demo.cjs",
+    "test:audit": "npm run test:electron && electron tests/electron-customer-dialog.cjs && electron tests/electron-catalog-audit.cjs && electron tests/electron-orders-audit.cjs && electron tests/electron-inventory-audit.cjs && electron tests/electron-data-audit.cjs"
   },
   "build": {
     "appId": "io.github.zhangyn1203.dispatch-note-desktop",

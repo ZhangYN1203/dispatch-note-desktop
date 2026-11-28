@@ -295,8 +295,7 @@ export function updateProduct(id: number, data: { brand?: string; productCode?: 
   }
 
   const oldCode = current.productCode
-  const oldName = current.productName
-
+  return withTransaction(() => {
   run(
     `UPDATE products SET productCode=?, productName=?, specification=?, packageSpec=?, unit=?, price=?, brand=? WHERE id=?`,
     [
@@ -314,12 +313,16 @@ export function updateProduct(id: number, data: { brand?: string; productCode?: 
   // If productCode changed, update all price tables to keep reference intact
   if (newCode !== oldCode) {
     run('UPDATE price_table_items SET productCode = ? WHERE productCode = ?', [newCode, oldCode])
+    run('UPDATE price_change_log SET productCode = ? WHERE productCode = ?', [newCode, oldCode])
   }
 
   return { success: true }
+  })
 }
 
 export function createProduct(data: { brand?: string; productCode: string; productName: string; specification?: string; packageSpec?: string; unit?: string; price?: number }) {
+  const initialPrice = data.price ?? 0
+  if (!Number.isFinite(initialPrice) || initialPrice < 0 || initialPrice > Number.MAX_SAFE_INTEGER / 100) return { id: -1, error: '请输入有效的非负单价' }
   // Validate required fields
   if (!data.productCode || !data.productCode.trim()) {
     return { id: -1, error: '产品编码不能为空' }
@@ -346,9 +349,10 @@ export function createProduct(data: { brand?: string; productCode: string; produ
     return { id: -1, error: `产品名称「${data.productName.trim()}」与规格「${data.specification?.trim() || ''}」组合已存在` }
   }
 
+  return withTransaction(() => {
   const result = run(
     'INSERT INTO products (brand, productCode, productName, specification, packageSpec, unit, price) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [data.brand || '', data.productCode.trim(), data.productName.trim(), data.specification || '', data.packageSpec || '', data.unit.trim(), data.price || 0]
+    [data.brand || '', data.productCode.trim(), data.productName.trim(), data.specification || '', data.packageSpec || '', data.unit!.trim(), initialPrice]
   )
 
   // Also sync to all price tables
@@ -356,11 +360,12 @@ export function createProduct(data: { brand?: string; productCode: string; produ
   for (const t of tables) {
     run(
       'INSERT OR IGNORE INTO price_table_items (priceTableId, productCode, price) VALUES (?, ?, ?)',
-      [t.id, data.productCode.trim(), data.price || 0]
+      [t.id, data.productCode.trim(), initialPrice]
     )
   }
 
   return { id: result.lastInsertRowid }
+  })
 }
 
 export function searchCustomers(keyword?: string) {
@@ -599,23 +604,15 @@ export function initPriceTableItems(priceTableId: number) {
 }
 
 export function updatePriceTableItem(priceTableId: number, productCode: string, newPrice: number) {
-  const current = queryOne('SELECT price FROM price_table_items WHERE priceTableId = ? AND productCode = ?', [priceTableId, productCode])
-  if (!current) return { success: false, message: '未找到该价格记录' }
-
-  const oldPrice = current.price
-
-  run(
-    'UPDATE price_table_items SET price = ?, updatedAt = datetime(\'now\',\'localtime\') WHERE priceTableId = ? AND productCode = ?',
-    [newPrice, priceTableId, productCode]
-  )
-
-  // Log the change
-  run(
-    'INSERT INTO price_change_log (priceTableId, productCode, oldPrice, newPrice) VALUES (?, ?, ?, ?)',
-    [priceTableId, productCode, oldPrice, newPrice]
-  )
-
-  return { success: true }
+  if (!Number.isFinite(newPrice) || newPrice < 0 || newPrice > Number.MAX_SAFE_INTEGER / 100) throw new Error('请输入有效的非负价格')
+  return withTransaction(() => {
+    const current = queryOne('SELECT price FROM price_table_items WHERE priceTableId = ? AND productCode = ?', [priceTableId, productCode])
+    if (!current) return { success: false, message: '未找到该价格记录' }
+    run("UPDATE price_table_items SET price = ?, updatedAt = datetime('now','localtime') WHERE priceTableId = ? AND productCode = ?", [newPrice, priceTableId, productCode])
+    if (queryOne('SELECT isDefault FROM price_tables WHERE id=?', [priceTableId])?.isDefault) run('UPDATE products SET price=? WHERE productCode=?', [newPrice, productCode])
+    run('INSERT INTO price_change_log (priceTableId, productCode, oldPrice, newPrice) VALUES (?, ?, ?, ?)', [priceTableId, productCode, current.price, newPrice])
+    return { success: true }
+  })
 }
 
 export function addPriceTableProduct(priceTableId: number, productCode: string) {
@@ -644,23 +641,14 @@ export function removePriceTableProduct(priceTableId: number, productCode: strin
 }
 
 export function undoLastPriceChange(priceTableId: number) {
-  const lastLog = queryOne(
-    'SELECT * FROM price_change_log WHERE priceTableId = ? ORDER BY id DESC LIMIT 1',
-    [priceTableId]
-  )
-  if (!lastLog) return { success: false, message: '没有可撤销的价格修改' }
-
-  run(
-    'UPDATE price_table_items SET price = ?, updatedAt = datetime(\'now\',\'localtime\') WHERE priceTableId = ? AND productCode = ?',
-    [lastLog.oldPrice, priceTableId, lastLog.productCode]
-  )
-
-  run('DELETE FROM price_change_log WHERE id = ?', [lastLog.id])
-
-  return {
-    success: true,
-    log: lastLog,
-  }
+  return withTransaction(() => {
+    const lastLog = queryOne('SELECT * FROM price_change_log WHERE priceTableId = ? ORDER BY id DESC LIMIT 1', [priceTableId])
+    if (!lastLog) return { success: false, message: '没有可撤销的价格修改' }
+    run("UPDATE price_table_items SET price = ?, updatedAt = datetime('now','localtime') WHERE priceTableId = ? AND productCode = ?", [lastLog.oldPrice, priceTableId, lastLog.productCode])
+    if (queryOne('SELECT isDefault FROM price_tables WHERE id=?', [priceTableId])?.isDefault) run('UPDATE products SET price=? WHERE productCode=?', [lastLog.oldPrice, lastLog.productCode])
+    run('DELETE FROM price_change_log WHERE id = ?', [lastLog.id])
+    return { success: true, log: lastLog }
+  })
 }
 
 export function getPriceChangeLogs(priceTableId: number) {

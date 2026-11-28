@@ -429,6 +429,33 @@ async function run() {
   await evaluate(`location.reload()`);await until(`!!document.querySelector('[data-testid="system-chooser"]')`);
   assert.equal(await evaluate(`document.querySelector('.workspace').dataset.system`),'choose','new page startup returns to chooser');
   reports.push('两个系统平级挂载，取消切换生效，来回切换保留未保存订单，重新打开先选择系统');
+
+  await evaluate(`document.querySelector('[data-system-choice="orders"]').click()`);
+  await until(`document.querySelector('.workspace')?.dataset.system==='orders'`);
+  handlers.createProduct({productCode:'UI-DEFAULT-PRICE',productName:'默认改价测试',unit:'件',price:12});
+  const defaultPriceTable=database.queryOne('SELECT id FROM price_tables WHERE isDefault=1').id;
+  await evaluate(`document.querySelector('.workspace-header a[href="#/product-manager"]').click()`);
+  await until(`!!document.querySelector('.price-table-chip')`);
+  await evaluate(`Array.from(document.querySelectorAll('.price-table-chip')).find(c=>c.textContent.includes('默认')).click()`);
+  await until(`document.body.innerText.includes('UI-DEFAULT-PRICE')`);
+  const defaultPriceRow=`Array.from(document.querySelectorAll('.items-editor tbody tr')).find(r=>r.innerText.includes('UI-DEFAULT-PRICE'))`;
+  assert.equal(await evaluate(`Array.from((${defaultPriceRow}).querySelectorAll('button')).some(b=>b.textContent==='修改价格')`),true,'default table needs an explicit price-edit action');
+  await evaluate(`Array.from((${defaultPriceRow}).querySelectorAll('button')).find(b=>b.textContent==='修改价格').click()`);
+  await until(`!!document.querySelector('input[aria-label="商品单价 UI-DEFAULT-PRICE"]')`);
+  await field('商品单价 UI-DEFAULT-PRICE','13.50');
+  await evaluate(`Array.from((${defaultPriceRow}).querySelectorAll('button')).find(b=>b.textContent==='保存').click()`);
+  await until(`document.body.innerText.includes('价格已更新') && (${defaultPriceRow})?.innerText.includes('13.50')`);
+  assert.equal(handlers.searchProducts('UI-DEFAULT-PRICE')[0].price,13.5);
+  reports.push('默认价格表可直接修改价格，真实IPC保存成功并同步商品基础价');
+
+  await evaluate(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('添加新商品')).click()`);
+  assert.equal(await evaluate(`!!document.querySelector('[aria-label="新增商品单价"]')`),true,'new product must expose initial unit price');
+  await field('新增商品编码','UI-NEW-PRICE');await field('新增商品名称','新增带单价商品');await field('新增商品规格','100g');await field('新增商品箱规','1x12');await field('新增商品单价','27.50');
+  await evaluate(`Array.from(document.querySelectorAll('.confirm-dialog button')).find(b=>b.textContent==='保存').click()`);
+  await until(`!document.querySelector('[aria-label="新增商品单价"]') && document.body.innerText.includes('UI-NEW-PRICE')`);
+  assert.equal(handlers.searchProducts('UI-NEW-PRICE')[0].price,27.5);
+  assert.equal(handlers.getPriceTableItems(defaultPriceTable).find(p=>p.productCode==='UI-NEW-PRICE').price,27.5);
+  reports.push('添加商品弹窗可填写单价，商品基础价与默认价格表一次保存一致');
   console.log(JSON.stringify({ passed: reports, artifactDirectory: root }, null, 2));
   app.exit(0);
 }

@@ -146,7 +146,7 @@ export interface ElectronAPI {
 
   // Customer Management
   createCustomer: (data: { code: string; name: string; address: string; contact?: string; phone?: string; remark?: string; priceTableId?: number }) => Promise<{ id: number }>
-  updateCustomer: (id: number, data: Partial<Customer>) => Promise<{ success: boolean }>
+  updateCustomer: (id: number, data: Partial<Customer>) => Promise<{ success: boolean; message?: string }>
   deleteCustomer: (id: number) => Promise<{ success: boolean }>
   getCustomerById: (id: number) => Promise<Customer | null>,
   getCustomersByPriceTableId: (priceTableId: number) => Promise<Customer[]>
@@ -162,7 +162,7 @@ export interface ElectronAPI {
   deletePriceTable: (id: number) => Promise<{ success: boolean; message?: string }>
   renamePriceTable: (id: number, name: string) => Promise<{ success: boolean }>
   getPriceTableItems: (priceTableId: number) => Promise<CustomerPrice[]>
-  updatePriceTableItem: (priceTableId: number, productCode: string, newPrice: number) => Promise<{ success: boolean }>
+  updatePriceTableItem: (priceTableId: number, productCode: string, newPrice: number) => Promise<{ success: boolean; message?: string }>
   addPriceTableProduct: (priceTableId: number, productCode: string) => Promise<{ success: boolean; message?: string }>
   removePriceTableProduct: (priceTableId: number, productCode: string) => Promise<{ success: boolean; message?: string }>
   undoPriceTableChange: (priceTableId: number) => Promise<{ success: boolean; log?: PriceChangeLog; message?: string }>

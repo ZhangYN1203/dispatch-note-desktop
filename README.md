@@ -44,6 +44,12 @@
 
 ![商品管理与价格表](docs/images/prices.png)
 
+### 客户资料弹窗
+
+![保留列表背景的客户详情弹窗，全部资料为虚构](docs/images/customer-dialog.png)
+
+点击客户卡片查看详情，支持 ×、空白遮罩或 Esc 关闭；编辑有改动时先确认，关闭后保留搜索和滚动位置。新增商品可直接填写单价，默认调价与撤销同步基础价格，旧订单保留原快照。
+
 ### 打印前确认规格
 
 ![打印规格及本地打印机设置指引](docs/images/print-settings.png)
@@ -105,6 +111,7 @@ npm run check:public      # 演示数据与待发布文件检查
 npm run typecheck         # 前端与主进程 TypeScript 检查
 npm run build:vite        # 类型检查与前端生产构建
 npm run test:electron     # 临时 userData 中的 Electron 集成测试
+npm run test:audit        # 全模块界面验收，包含客户弹窗、商品定价、订单汇总、库存及数据工具
 npm run electron:build    # Windows NSIS 安装包
 npm run electron:build:dir # Windows 目录版
 ```
@@ -112,6 +119,8 @@ npm run electron:build:dir # Windows 目录版
 回归测试覆盖订单/导入/磁盘失败回滚、库存事务与重复请求、状态校验与退回、旧库升级原文件备份、快照、历史编号、备份结构校验及导入缺失列。Electron 集成测试验证实际 IndexedDB 迁移、取消编辑、备份恢复、首页导入、打印错误提示，以及连续纸、自定义宽高、A4/A5 横向、字号和边距变化、空订单的 PDF 物理尺寸与分页。
 
 测试只使用临时目录。打印失败提示通过模拟打印机回调验证，不会向真实打印机发送任务。
+
+1.4.3 完整验收包含 40 项自动检查与 100 组界面集成检查。具体范围见 [功能验收记录](docs/functional-audit-2026-11-28.md) 和 [客户弹窗交互及验证](docs/customer-dialog-1.4.3.md)。实体打印仍需使用目标设备校准。
 
 GitHub Actions 在 Windows 上运行文件检查、回归测试、类型检查、生产构建和 Electron 集成测试。打包输出位于 `release/`，不提交到源码仓库。当前安装包未签名，未使用自定义图标。
 

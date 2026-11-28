@@ -24,4 +24,4 @@ jobs:
       - name: Database regression tests
         run: npm test
       - name: Electron integration tests and production build
-        run: npm run test:electron
+        run: npm run test:audit

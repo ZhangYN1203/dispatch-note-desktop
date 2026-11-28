@@ -150,7 +150,7 @@ export async function createCustomer(data: { code: string; name: string; address
   return api.createCustomer(data)
 }
 
-export async function updateCustomer(id: number, data: Partial<Customer>): Promise<{ success: boolean }> {
+export async function updateCustomer(id: number, data: Partial<Customer>): Promise<{ success: boolean; message?: string }> {
   const api = getApi()
   return api.updateCustomer(id, data)
 }
@@ -214,7 +214,7 @@ export async function getPriceTableItems(priceTableId: number): Promise<Customer
   return api.getPriceTableItems(priceTableId)
 }
 
-export async function updatePriceTableItem(priceTableId: number, productCode: string, newPrice: number): Promise<{ success: boolean }> {
+export async function updatePriceTableItem(priceTableId: number, productCode: string, newPrice: number): Promise<{ success: boolean; message?: string }> {
   const api = getApi()
   return api.updatePriceTableItem(priceTableId, productCode, newPrice)
 }
